@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.9
+ ArduinoDRO + Tach V5.10
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 28 November 2014 by Ryszard Malinowski
+ Updated 28 February 2015 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -37,6 +37,7 @@
  Version 5.7 - Added option to smooth DRO reading by implementing weighted average with automatic smoothing factor
  Version 5.8 - Correction to calculate average for scale X. Increase weighted average sample size to 32.
  Version 5.9 - Reduce flickering on RPM display.  Remove long delay in RPM displaying Zero after the rotation stops.
+ Version 5.10 - Add "smart rounding" on tach display.  Fix 1% tach rounding.  Support processors running at 8MHz clock.
  
  
  NOTE: This program supports pulse sensor to measure rpm.  
@@ -113,18 +114,21 @@
 		Default value = 6
 
 	TACH_ROUND
-		Defines if tach reading should be rounded to the nearest 1% of current measured rpm.   
-		If rounding is enabled the reading is rounded by 1% of current rpm.  
-		For example measured rpm between 950 and 1049 will be rounded to the nearest 10 rpm (reporting 950, 960, 970 etc.)
+		Defines how tach reading should be rounded.   
+		If rounding is enabled the reading can be rounded either by 1% of current rpm or to the fixed "round" number with predefined RPM thresholds ("smart rounding"). 
+		For example with 1% rounding if measured rpm is between 980rpm and  1020 rpm the display will show numbers rounded to 9 and 10 (i.e. 981, 990, 999, 1000, 1010, 1020 etc.). 
+		With "smart rounding" the measured rpm is rounded to the nearest 1, 2, 5, 10, 20, 50 and 100 depends on measured RPM (change at predefined thresholds).
+		For example with "smart rounding" all measured rpm is between 500pm and  2000 rpm the display will show numbers rounded to the nearest 5 (i.e. 980, 985, 990, 995, 1000, 1005  etc.). 
 		Note: This value is not used when TACH_RAW_DATA_FORMAT is enabled 
 		Possible values:
 			0 = exact measured tach reading is sent
-			1 = tach reading is rounded to the nearest 1% of measured rpm
-		Default value = 1
+			1 = tach reading is rounded to the nearest 1% of measured rpm (1% rounding)
+			2 = tach reading is rounded to the nearest "round" number with fixed thresholds ("smart rounding")
+		Default value = 2
 
 	TACH_RAW_DATA_FORMAT
 		Defines the format of tach data sent to serial port.
-		Note: when rad data format is used, then TACH_PRESCALE, TACH_AVERAGE_COUNT and TACH_ROUND are ignored 
+		Note: when raw data format is used, then TACH_PRESCALE, TACH_AVERAGE_COUNT and TACH_ROUND are ignored 
 		Possible values:
 			1 = tach data is sent in raw (two values) format: T<total_time>/<number_of_pulses>;
 			0 = tach data is sent in single value format: T<rpm>;
@@ -208,8 +212,8 @@
 // Number of tach measurements to average 
 #define TACH_AVERAGE_COUNT 6
 
-// This is 1% rounding for tachometer display (set to 0 to disable)
-#define TACH_ROUND 1
+// This is rounding for tachometer display (set to 0 to disable or 1 for 1% rounding)
+#define TACH_ROUND 2
 
 // Tach data format
 #define TACH_RAW_DATA_FORMAT 0			// single value format: T<rpm>;
@@ -438,8 +442,9 @@ int const tachUpdateFrequencyCounterLimit = (((long) UPDATE_FREQUENCY) / ((long)
 #endif
 
 int const updateFrequencyCounterLimit = (int) (((unsigned long) SCALE_CLK_FREQUENCY) /((unsigned long) UPDATE_FREQUENCY));
-int const clockCounterLimit = (int) (((unsigned long) 2000000) / (unsigned long) SCALE_CLK_FREQUENCY) - 10;
-int const scaleClockDutyLimit = (int) (((unsigned long) 20000) * ((unsigned long) SCALE_CLK_DUTY) / (unsigned long) SCALE_CLK_FREQUENCY);
+int const clockCounterLimit = (int) (((unsigned long) (F_CPU/8)) / (unsigned long) SCALE_CLK_FREQUENCY) - 10;
+int const scaleClockDutyLimit = (int) (((unsigned long) (F_CPU/800)) * ((unsigned long) SCALE_CLK_DUTY) / (unsigned long) SCALE_CLK_FREQUENCY);
+int const scaleClockFirstReadDelay = (int) ((unsigned long) F_CPU/4000000);
 
 //variables that will store tach info and status
 volatile unsigned long tachInterruptTimer;
@@ -738,13 +743,13 @@ ISR(TIMER2_COMPA_vect)
 {
 #if DRO_ENABLED > 0
 
-	// Contorl the scale clock for only first 21 loops
+	// Control the scale clock for only first 21 loops
 	if (updateFrequencyCounter < SCALE_CLK_PULSES) {
 	
 		// Set clock low if high and then delay 2us
 		if (SCALE_CLK_OUTPUT_PORT & _BV(CLK_PIN_BIT)) {
 			SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
-			TCNT2  = scaleClockDutyLimit - 4; 
+			TCNT2  = scaleClockDutyLimit - scaleClockFirstReadDelay;
 			return;
 		}
 
@@ -953,7 +958,7 @@ inline boolean sendTachOutputData()
 	unsigned long currentMicros;
 
 
-	// Read data from the last interrupt (stop interupts to read a pair in sync)
+	// Read data from the last interrupt (stop interrupts to read a pair in sync)
 	cli();
 	tachRotationCount = tachInterruptRotationCount;
 	tachInterruptRotationCount = 0;
@@ -1049,12 +1054,33 @@ inline boolean sendTachOutputData()
 	// calculate Rounded RPM
 	unsigned long tachReadRoundFactor;
 
+	// fixed threasholds rounding
+#if TACH_ROUND > 1
+	if (tachReadoutRpm <200) {
+		tachReadRoundFactor = 1;
+	} else if (tachReadoutRpm <500) {
+		tachReadRoundFactor = 2;
+	} else if (tachReadoutRpm <2000) {
+		tachReadRoundFactor = 5;
+	} else if (tachReadoutRpm <5000) {
+		tachReadRoundFactor = 10;
+	} else if (tachReadoutRpm <20000) {
+		tachReadRoundFactor = 20;
+	} else if (tachReadoutRpm <50000) {
+		tachReadRoundFactor = 50;
+	} else {
+		tachReadRoundFactor = 100;
+	}
+
+	// 1% rounding
+#else
 	// Determine rounding factor
-	tachReadRoundFactor = (unsigned long) ((tachReadoutRpm * 10)/((int) 100) + 5);
+	tachReadRoundFactor = (unsigned long) ((tachReadoutRpm * 10)/((int) 100));
 	tachReadRoundFactor = ((unsigned long) tachReadRoundFactor/10);
 	if (tachReadRoundFactor == 0) {
 		tachReadRoundFactor = 1;
 	}
+#endif
 	
 	// Round result
 	tachReadoutRpm = ((unsigned long) ((tachReadoutRpm * 10)/tachReadRoundFactor) + 5);
