@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5
+ ArduinoDRO + Tach V5.1
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -24,6 +24,7 @@
 
  Added support for tachometer on axis T with accurate timing
  Added option to send rpm row data (time and count)
+ Correction to retrieving scale sign bit.
 
  
  NOTE: This program supports hall-sensor to measure rpm.  The tach output format for Android DRO is T<time>/<retation>.
@@ -577,26 +578,28 @@ ISR(TIMER2_COMPA_vect)
 		clockPinHigh = 0;
 
 		//read the pin state and shift it into the appropriate variables
+		if (bitOffset < SCALE_CLK_PULSES) {
 #if SCALE_X_ENABLED > 0
-		xValue |= ((long)(X_INPUT_PORT & _BV(X_PIN_BIT) ? 1 : 0) << bitOffset);
+			xValue |= ((long)(X_INPUT_PORT & _BV(X_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
 
 #if SCALE_Y_ENABLED > 0
-		yValue |= ((long)(Y_INPUT_PORT & _BV(Y_PIN_BIT) ? 1 : 0) << bitOffset);
+			yValue |= ((long)(Y_INPUT_PORT & _BV(Y_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
 
 #if SCALE_Z_ENABLED > 0
-		zValue |= ((long)(Z_INPUT_PORT & _BV(Z_PIN_BIT) ? 1 : 0) << bitOffset);
+			zValue |= ((long)(Z_INPUT_PORT & _BV(Z_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
 
 #if SCALE_W_ENABLED > 0
-		wValue |= ((long)(W_INPUT_PORT & _BV(W_PIN_BIT) ? 1 : 0) << bitOffset);
+			wValue |= ((long)(W_INPUT_PORT & _BV(W_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
 
-		//increment the bit offset
-		bitOffset++;
+			//increment the bit offset
+			bitOffset++;
 
-		if (bitOffset >= SCALE_CLK_PULSES) {
+		} else {
+
 			//stop the timer after the predefined number of pulses
 			stopClkTimer();
 #if SCALE_X_ENABLED > 0
