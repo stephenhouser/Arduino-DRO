@@ -1,12 +1,12 @@
 /*
- ArduinoDRO + Tach V5.1
+ ArduinoDRO + Tach V5.2
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
  Update 15 July 2014
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
- Updated 08 August 2014 by Ryszard Malinowski
+ Updated 10 August 2014 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -25,6 +25,7 @@
  Added support for tachometer on axis T with accurate timing
  Added option to send rpm row data (time and count)
  Correction to retrieving scale sign bit.
+ Corrected scale frequency clock.
 
  
  NOTE: This program supports hall-sensor to measure rpm.  The tach output format for Android DRO is T<time>/<retation>.
@@ -62,8 +63,18 @@
 			0 = tach sensor functionality is not supported
 		Default value = 1
 
+	TACH_PRESCALE
+		Defines how many tach pulses per one revolution the sensor sends.  
+		For example if tach sensor uses two magnets on the shaft the sensor will generate two pulses per revolution.
+		This can be used to get better resolution and faster response time for very low rpm
+		Note: This value is not used when TACH_RAW_DATA_FORMAT is enabled 
+		Possible values:
+			any integer number greater than 0
+		Default value = 1
+
 	TACH_RAW_DATA_FORMAT
 		Defines the format of tach data sent to serial port.
+		Note: when rad data format is used, then TACH_PRESCALE is ignored 
 		Possible values:
 			1 = tach data is sent in raw (two values) format: T<total_time>/<number_of_pulses>;
 			0 = tach data is sent in single value format: T<rpm>;
@@ -124,6 +135,9 @@
 
 // System config (if Tach is not connected change in the corresponding constant value from "1" to "0")
 #define TACH_ENABLED 1
+
+// Tach prescale value (number of tach sensor pulses per revolution)
+#define  TACH_PRESCALE 1
 
 // Tach data format
 #define TACH_RAW_DATA_FORMAT 0			// single value format: T<rpm>;
@@ -525,8 +539,8 @@ void setupClkTimer(int frequency)
 	TCCR2A = 0;			// set entire TCCR2A register to 0
 	TCCR2B = 0;			// same for TCCR2B
 
-	// set compare match register
-	OCR2A = F_CPU / (8 * frequency) - 1; 	// 160 - 1;
+	// set compare match register to twice the frequency
+	OCR2A = F_CPU / (16 * frequency) - 1; 	// 160 - 1;
 
 	// turn on CTC mode
 	TCCR2A |= (1 << WGM21);
@@ -578,7 +592,7 @@ ISR(TIMER2_COMPA_vect)
 		clockPinHigh = 0;
 
 		//read the pin state and shift it into the appropriate variables
-		if (bitOffset < SCALE_CLK_PULSES) {
+		if (bitOffset < SCALE_CLK_PULSES - 1) {
 #if SCALE_X_ENABLED > 0
 			xValue |= ((long)(X_INPUT_PORT & _BV(X_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
@@ -604,22 +618,22 @@ ISR(TIMER2_COMPA_vect)
 			stopClkTimer();
 #if SCALE_X_ENABLED > 0
 			if (X_INPUT_PORT & _BV(X_PIN_BIT))
-				xValue |= ((long)0x7ff << 21);
+				xValue |= ((long)0xfff << 20);
 #endif
 
 #if SCALE_Y_ENABLED > 0
 			if (Y_INPUT_PORT & _BV(Y_PIN_BIT))
-				yValue |= ((long)0x7ff << 21);
+				yValue |= ((long)0xfff << 20);
 #endif
 
 #if SCALE_Z_ENABLED > 0
 			if (Z_INPUT_PORT & _BV(Z_PIN_BIT))
-				zValue |= ((long)0x7ff << 21);
+				zValue |= ((long)0xfff << 20);
 #endif
 
 #if SCALE_W_ENABLED > 0
 			if (W_INPUT_PORT & _BV(W_PIN_BIT))
-				wValue |= ((long)0x7ff << 21);
+				wValue |= ((long)0xfff << 20);
 #endif
 		}
 	}
@@ -686,7 +700,8 @@ inline void formatTachOutput()
 		if (tachReadoutSendData) {
 			unsigned long averageTime = tachReadoutMicrosec/tachReadoutRotationCount;
 			if (averageTime != 0) {
-				tachReadoutRpm = ((unsigned long) 600000000 / averageTime) + 5;
+				tachReadoutRpm = ((unsigned long) 600000000 / averageTime);
+				tachReadoutRpm = ((unsigned long) tachReadoutRpm/TACH_PRESCALE) + 5;
 				tachReadoutRpm = ((unsigned long) tachReadoutRpm / 10);
 			} else {
 				tachReadoutSendData = false;
