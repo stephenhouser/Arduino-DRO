@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.10
+ ArduinoDRO + Tach V5.11
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 28 February 2015 by Ryszard Malinowski
+ Updated 02 January 2016 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -38,9 +38,10 @@
  Version 5.8 - Correction to calculate average for scale X. Increase weighted average sample size to 32.
  Version 5.9 - Reduce flickering on RPM display.  Remove long delay in RPM displaying Zero after the rotation stops.
  Version 5.10 - Add "smart rounding" on tach display.  Fix 1% tach rounding.  Support processors running at 8MHz clock.
+ Version 5.11 - Add "touch probe" support.
  
  
- NOTE: This program supports pulse sensor to measure rpm.  
+ NOTE: This program supports pulse sensor to measure rpm and switch type touch probe .  
  
  Configuration parameters:
 	SCALE_<n>_ENABLED
@@ -150,7 +151,7 @@
 			integer number between 2 and 13
 		Default value = 7
 
-	TACH_LED_PIN
+	OUTPUT_TACH_LED_PIN
 		Defines the I/O pin where the tach LED feedback is connected.  
 		Tach LED feedback indicates the status of tachPin for debugging purposes
 		Possible values:
@@ -177,6 +178,35 @@
 			any integer number between 1 and UPDATE_FREQUENCY 
 		Default value = 4
 	
+	PROBE_ENABLED
+		Defines if touch probe sensor functionality should be supported.  
+		If supported touch probe should be connected to I/O pin defined in constant "probePin".   
+		Possible values:
+			1 = touch probe functionality is supported
+			0 = touch probe functionality is not supported
+		Default value = 1
+
+	INPUT_PROBE_PIN
+		Defines the I/O pin where touch probe signal is connected
+		Possible values:
+			integer number between 2 and 13
+		Default value = 8
+
+	PROBE_INVERT
+		Defines if the touch probe input pin signal needs to be inverted (enter the signal level when touch probe is not touching).
+		Possible values:
+			0 = touch probe input pin signal is LOW (logical Zero) when touch probe is in "normal open" status (not touching)
+			1 = touch probe input pin signal is HIGH (logical One) when touch probe is in "normal open" status (not touching)
+		Default value = 0
+
+	OUTPUT_PROBE_LED_PIN
+		Defines the I/O pin where the touch probe LED feedback is connected.  
+		Touch probe LED feedback indicates the status of Touch probe for debugging purposes
+		Possible values:
+			integer number between 2 and 13
+		Default value = 12
+
+
  */
  
 
@@ -223,7 +253,18 @@
 
 #define INPUT_TACH_PIN 7
 
-#define TACH_LED_PIN 13
+#define OUTPUT_TACH_LED_PIN 13
+
+
+// Touch probe setup (if Touch Probe is not connected change in the corresponding constant value from "1" to "0")
+#define PROBE_ENABLED 1
+
+#define INPUT_PROBE_PIN 8				// Pin 8 connected to Touch Probe
+
+#define PROBE_INVERT 0					// Touch Probe signal inversion: Open = Input pin is Low; Closed = Input pin is High
+
+#define OUTPUT_PROBE_LED_PIN 12			// When Tach is not enabled you may change it to 13 in order to use on-board LED.
+
 
 // General Settings
 #define UART_BAUD_RATE 9600				//  Set this so it matches the BT module's BAUD rate 
@@ -418,15 +459,37 @@
 #define TACH_INTERRUPT_PIN PCINT5
 #endif
 
-#if TACH_LED_PIN < 8 
-#define LED_PIN_BIT TACH_LED_PIN
-#define LED_DDR DDRD
-#define LED_OUTPUT_PORT PORTD
+#if OUTPUT_TACH_LED_PIN < 8 
+#define TACH_LED_PIN_BIT OUTPUT_TACH_LED_PIN
+#define TACH_LED_DDR DDRD
+#define TACH_LED_OUTPUT_PORT PORTD
 #else
-#define LED_PIN_BIT (TACH_LED_PIN - 8)
-#define LED_DDR DDRB
-#define LED_OUTPUT_PORT PORTB
+#define TACH_LED_PIN_BIT (OUTPUT_TACH_LED_PIN - 8)
+#define TACH_LED_DDR DDRB
+#define TACH_LED_OUTPUT_PORT PORTB
 #endif
+
+#if INPUT_PROBE_PIN < 8 
+#define PROBE_PIN_BIT INPUT_PROBE_PIN
+#define PROBE_DDR DDRD
+#define PROBE_INPUT PORTD
+#else
+#define PROBE_PIN_BIT (INPUT_PROBE_PIN - 8)
+#define PROBE_DDR DDRB
+#define PROBE_INPUT_PORT PORTB
+#endif
+
+#if OUTPUT_PROBE_LED_PIN < 8 
+#define PROBE_LED_PIN_BIT OUTPUT_PROBE_LED_PIN
+#define PROBE_LED_DDR DDRD
+#define PROBE_LED_OUTPUT_PORT PORTD
+#else
+#define PROBE_LED_PIN_BIT (OUTPUT_PROBE_LED_PIN - 8)
+#define PROBE_LED_DDR DDRB
+#define PROBE_LED_OUTPUT_PORT PORTB
+#endif
+
+
 
 // Some constants calculated here
 unsigned long const minRpmTime = (((long) MIN_RPM_DELAY) * ((long) 1000));
@@ -464,6 +527,9 @@ volatile int tachLastReadPosition;
 
 volatile int tachUpdateFrequencyCounter;
 volatile boolean sendTachData;
+
+// variable to store the touch probe status.
+volatile unsigned int probeReportedValue;
 
 //variables that will store the DRO readout
 volatile boolean tickTimerFlag;
@@ -569,9 +635,9 @@ void setup()
 	// Setup tach port for input
 	TACH_DDR &= ~_BV(TACH_PIN_BIT);
 	
-	LED_DDR |= _BV(LED_PIN_BIT);
+	TACH_LED_DDR |= _BV(TACH_LED_PIN_BIT);
 	// Set LED pin to LOW
-	LED_OUTPUT_PORT &= ~_BV(LED_PIN_BIT);
+	TACH_LED_OUTPUT_PORT &= ~_BV(TACH_LED_PIN_BIT);
 	
 	// Setup interrupt on tach pin
 	PCICR |= _BV(TACH_INTERRUPT_REGISTER);
@@ -593,6 +659,19 @@ void setup()
 	tachLastReadPosition = TACH_AVERAGE_COUNT - 1;
 #endif
 	tachUpdateFrequencyCounter = 0;
+
+#endif
+
+
+	//initialize touch probe values
+#if PROBE_ENABLED > 0
+	// Setup tach port for input
+	PROBE_DDR &= ~_BV(PROBE_PIN_BIT);
+	PROBE_LED_DDR |= _BV(PROBE_LED_PIN_BIT);
+	// Set LED pin to LOW
+	PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
+	// Set probe input to "not touching"
+	probeReportedValue = 0;
 
 #endif
 
@@ -681,6 +760,17 @@ void loop()
 				Serial.print(F(";"));
 			}
 		}
+#endif
+
+
+		// print Touch Probe data to serial port
+#if PROBE_ENABLED > 0
+		// Calculate tach data
+		probeReportedValue = readProbeOutputData();
+
+		Serial.print(F("P"));
+		Serial.print((unsigned int)probeReportedValue);
+		Serial.print(F(";"));
 #endif
 	}
 }
@@ -1104,11 +1194,38 @@ ISR(TACH_INTERRUPT_VECTOR)
 		// record timestamp of change in port input
 		tachInterruptTimer = micros();
 		tachInterruptRotationCount++;
-	    LED_OUTPUT_PORT |= _BV(LED_PIN_BIT);
+	    TACH_LED_OUTPUT_PORT |= _BV(TACH_LED_PIN_BIT);
 	} else {
 	// read tach port and output it to LED
-		LED_OUTPUT_PORT &= ~_BV(LED_PIN_BIT);
+		TACH_LED_OUTPUT_PORT &= ~_BV(TACH_LED_PIN_BIT);
 	}
 }
 #endif
 
+
+
+
+// Interrupt to read tach pin change
+#if PROBE_ENABLED > 0
+inline unsigned int readProbeOutputData()
+{
+	if (PROBE_INPUT_PORT & _BV(PROBE_PIN_BIT)) {
+	// Return probe signal 
+#if PROBE_INVERT == 0
+		PROBE_LED_OUTPUT_PORT |= _BV(PROBE_LED_PIN_BIT);
+		return 1;
+#else
+		PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
+		return 0;
+#endif
+	} else {
+#if PROBE_INVERT == 0
+		PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
+		return  0;
+#else
+		PROBE_LED_OUTPUT_PORT |= _BV(PROBE_LED_PIN_BIT);
+		return 1;
+#endif
+	}
+}
+#endif
