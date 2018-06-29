@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.2
+ ArduinoDRO + Tach V5.3
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -23,10 +23,12 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
  Added support for tachometer on axis T with accurate timing
- Added option to send rpm row data (time and count)
+ Added option to send rpm raw data (time and count)
  Correction to retrieving scale sign bit.
  Corrected scale frequency clock.
-
+ Added option to prescale tach reading compensating for more than one tach pulse per rotation.
+ Added option to average and round tach output values.
+ Added option to select max tach update frequency
  
  NOTE: This program supports hall-sensor to measure rpm.  The tach output format for Android DRO is T<time>/<retation>.
  Android DRO application must support this format for axis T.
@@ -72,9 +74,28 @@
 			any integer number greater than 0
 		Default value = 1
 
+	TACH_AVERAGE_COUNT
+		Defines the number of last tach readings that will be used to calculate average tach rpm.
+		If you want to send measured rpm instead of average rpm set this value to 1.
+		Note: This value is not used when TACH_RAW_DATA_FORMAT is enabled 
+		Possible values:
+			1 = exact measured tach reading is sent
+			any integer number greater than 1 - average tach reading is sent 
+		Default value = 10
+
+	TACH_ROUND
+		Defines if tach reading should be rounded to the nearest 1% of current measured rpm.   
+		If rounding is enabled the reading is rounded by 1% of current rpm.  
+		For example measured rpm between 950 and 1049 will be rounded to the nearest 10 rpm (reporting 950, 960, 970 etc.)
+		Note: This value is not used when TACH_RAW_DATA_FORMAT is enabled 
+		Possible values:
+			0 = exact measured tach reading is sent
+			1 = tach reading is rounded to the nearest 1% of measured rpm
+		Default value = 1
+
 	TACH_RAW_DATA_FORMAT
 		Defines the format of tach data sent to serial port.
-		Note: when rad data format is used, then TACH_PRESCALE is ignored 
+		Note: when rad data format is used, then TACH_PRESCALE, TACH_AVERAGE_COUNT and TACH_ROUND are ignored 
 		Possible values:
 			1 = tach data is sent in raw (two values) format: T<total_time>/<number_of_pulses>;
 			0 = tach data is sent in single value format: T<rpm>;
@@ -110,11 +131,18 @@
 		Default value = 9600
 
 	UPDATE_FREQUENCY
-		Defines the Frequency in Hz (number of timer per second the scales are read and the data is sent to the application).
+		Defines the Frequency in Hz (number of timer per second) the scales are read and the data is sent to the application.
 		Possible values:
 			any integer number between 1 and 64 
 		Default value = 24
 		
+	TACH_UPDATE_FREQUENCY
+		Defines the max Frequency in Hz (number of timer per second) the tach output is sent to the application.
+		Note: This value must be a divider of UPDATE_FREQUENCY that would result zero reminder.
+		      For example for UPDATE_FREQUENCY = 24 valid TACH_UPDATE_FREQUENCY are: 1, 2, 3, 4, 6, 8, 12 and 24 
+		Possible values:
+			any integer number between 1 and UPDATE_FREQUENCY 
+		Default value = 8
 	
  */
  
@@ -139,11 +167,17 @@
 // Tach prescale value (number of tach sensor pulses per revolution)
 #define  TACH_PRESCALE 1
 
+// Number of tach measurments to average 
+#define TACH_AVERAGE_COUNT 10
+
+// This is 1% rounding for tachometer display (set to 0 to disable)
+#define TACH_ROUND 1
+
 // Tach data format
 #define TACH_RAW_DATA_FORMAT 0			// single value format: T<rpm>;
 
 // Tach RPM config
-#define MIN_RPM_DELAY 1200				// 1.2 sec calculates to low range = 50 rpm.
+#define MIN_RPM_DELAY 200				// 1.2 sec calculates to low range = 50 rpm.
 
 #define INPUT_TACH_PIN 7
 
@@ -152,6 +186,7 @@
 // General Settings
 #define UART_BAUD_RATE 9600				//  Set this so it matches the BT module's BAUD rate 
 #define UPDATE_FREQUENCY 24				//  Frequency in Hz (number of timer per second the scales are read and the data is sent to the application)
+#define TACH_UPDATE_FREQUENCY 8			//  Max Frequency in Hz (number of timer per second) the tach output is sent to the application
 
 //---END OF CONFIGURATION PARAMETERS ---
 
@@ -340,8 +375,14 @@
 #define LED_OUTPUT_PORT PORTB
 #endif
 
+
 unsigned long const minRpmTime = (((long) MIN_RPM_DELAY) * ((long) 1000));
 
+#if TACH_UPDATE_FREQUENCY == UPDATE_FREQUENCY
+int const tachUpdateFrequencyCounterLimit = 0;
+#else
+int const tachUpdateFrequencyCounterLimit = (((long) UPDATE_FREQUENCY) / ((long) TACH_UPDATE_FREQUENCY));
+#endif
 
 //variables that will store tach info and status
 volatile unsigned long tachInterruptTimer;
@@ -353,8 +394,13 @@ volatile unsigned long tachTimerStart;
 volatile unsigned long tachReadoutRotationCount;
 volatile unsigned long tachReadoutMicrosec;
 volatile unsigned long tachReadoutRpm;
-volatile boolean tachReadoutSendData = false;
 
+#if TACH_AVERAGE_COUNT > 1
+volatile unsigned long tachLastRead[TACH_AVERAGE_COUNT];
+volatile int tachLastReadPosition;
+#endif
+
+volatile int tachUpdateFrequencyCounter;
 
 //variables that will store the DRO readout
 volatile boolean tickTimerFlag;
@@ -423,7 +469,15 @@ void setup()
 
 	tachReadoutRotationCount = 0;
 	tachReadoutMicrosec = 0;
-	tachReadoutSendData = false;
+	
+#if TACH_AVERAGE_COUNT > 1
+	for (tachLastReadPosition = 0; tachLastReadPosition < (int) TACH_AVERAGE_COUNT; tachLastReadPosition++) {
+		tachLastRead[tachLastReadPosition] = 0;
+	}
+	tachLastReadPosition = 0;
+#endif
+	tachUpdateFrequencyCounter = 0;
+
 #endif
 
 
@@ -483,21 +537,23 @@ void loop()
 		// print Tach rpm to serial port
 #if TACH_ENABLED > 0
 
-		// Format tach data
-		formatTachOutput();
+		// Check tach reporting frequency
+		tachUpdateFrequencyCounter++;
+		if (tachUpdateFrequencyCounter >= tachUpdateFrequencyCounterLimit) {
+			tachUpdateFrequencyCounter = 0;
 
-		// output tach data
-		if (tachReadoutSendData) {
-			Serial.print(F("T"));
-			if (TACH_RAW_DATA_FORMAT > 0) {
+			// Output tach data
+			if (sendTachOutputData()) {
+				Serial.print(F("T"));
+#if TACH_RAW_DATA_FORMAT > 0
 				Serial.print((unsigned long)tachReadoutMicrosec);
 				Serial.print(F("/"));
 				Serial.print((unsigned long)tachReadoutRotationCount);
-			} else {
+#else
 				Serial.print((unsigned long)tachReadoutRpm);
+#endif
+				Serial.print(F(";"));
 			}
-			Serial.print(F(";"));
-			tachReadoutSendData = false;
 		}
 #endif
 
@@ -643,7 +699,7 @@ ISR(TIMER2_COMPA_vect)
 
 // Calculate the tach rpm 
 #if TACH_ENABLED > 0
-inline void formatTachOutput()
+inline boolean sendTachOutputData()
 {
 	unsigned long microSeconds;
 	unsigned long tachRotationCount;
@@ -661,18 +717,13 @@ inline void formatTachOutput()
 	// reset values and ignore this readout if clock or rotation counter overlapses
 	if (tachTimer < tachTimerStart) {
 		tachTimerStart = tachTimer;
-		return;
+		return false;
 	}
 		
 	// We have at least one tick on rpm sensor so calculate the time between ticks
 	if (tachRotationCount != 0) {
 		tachReadoutRotationCount = tachRotationCount;
 		tachReadoutMicrosec = tachTimer - tachTimerStart;
-
-		// Ignore readout that is too low
-		if (tachReadoutMicrosec <= minRpmTime) {
-			tachReadoutSendData = true;
-		}
 
 		tachTimerStart = tachTimer;
 
@@ -682,32 +733,75 @@ inline void formatTachOutput()
 		// reset timer if clock overlapses
 		if (currentMicros < tachTimerStart) {
 			tachTimerStart = 0;
-			return;
+			return false;
 		} else {
 			// if no pulses for longer than minRpmTime then set rpm to zero
 			microSeconds = currentMicros - tachTimerStart;
 			if (microSeconds > minRpmTime ) {
 				tachReadoutRotationCount = 0;
 				tachReadoutMicrosec = 0;
-				tachReadoutRpm = 0;
-				tachReadoutSendData = true;
-				return;
-			}
-		}
-	}
-		
-	if (TACH_RAW_DATA_FORMAT == 0) {
-		if (tachReadoutSendData) {
-			unsigned long averageTime = tachReadoutMicrosec/tachReadoutRotationCount;
-			if (averageTime != 0) {
-				tachReadoutRpm = ((unsigned long) 600000000 / averageTime);
-				tachReadoutRpm = ((unsigned long) tachReadoutRpm/TACH_PRESCALE) + 5;
-				tachReadoutRpm = ((unsigned long) tachReadoutRpm / 10);
 			} else {
-				tachReadoutSendData = false;
+				return false;
 			}
 		}
 	}
+
+#if TACH_RAW_DATA_FORMAT == 0
+	// Calculate RPM 
+	if (tachReadoutRotationCount == 0) {
+		tachReadoutRpm = 0;
+	} else {
+		unsigned long averageTime = tachReadoutMicrosec/tachReadoutRotationCount;
+		// Ignore when time is zero
+		if (averageTime == 0) {
+			return false;
+		} else {
+			tachReadoutRpm = ((unsigned long) 600000000 / averageTime);
+			tachReadoutRpm = ((unsigned long) tachReadoutRpm/TACH_PRESCALE) + 5;
+			tachReadoutRpm = ((unsigned long) tachReadoutRpm / 10);
+		}
+	}
+
+#if TACH_AVERAGE_COUNT > 1
+	// calculate Average RPM
+	unsigned long tachReadSum;
+	int readCounter;
+	// Rotate tachLastReadPosition
+	if (tachLastReadPosition == (int) TACH_AVERAGE_COUNT) {
+		tachLastReadPosition = 0;
+	}
+	// Save current read and increment position 
+	tachLastRead[tachLastReadPosition] = tachReadoutRpm;
+	tachLastReadPosition++;
+	// Calculate average read
+	tachReadSum = 0;
+	for (readCounter = 0; readCounter < (int) TACH_AVERAGE_COUNT; readCounter++) {
+		tachReadSum = tachReadSum + tachLastRead[readCounter];
+	}
+	tachReadoutRpm = ((unsigned long) tachReadSum / ((int) TACH_AVERAGE_COUNT));
+#endif
+
+#if TACH_ROUND > 0
+	// calculate Rounded RPM
+	unsigned long tachReadRoundFactor;
+
+	// Determine rounding factor
+	tachReadRoundFactor = (unsigned long) ((tachReadoutRpm * 10)/((int) 100) + 5);
+	tachReadRoundFactor = ((unsigned long) tachReadRoundFactor/10);
+	if (tachReadRoundFactor == 0) {
+		tachReadRoundFactor = 1;
+	}
+	
+	// Round result
+	tachReadoutRpm = ((unsigned long) ((tachReadoutRpm * 10)/tachReadRoundFactor) + 5);
+	tachReadoutRpm = ((unsigned long) tachReadoutRpm/10);
+	tachReadoutRpm = ((unsigned long) tachReadoutRpm * tachReadRoundFactor);
+#endif
+
+#endif
+
+	return true;
+
 }
 #endif
 
