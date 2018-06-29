@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.8
+ ArduinoDRO + Tach V5.9
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 14 November 2014 by Ryszard Malinowski
+ Updated 28 November 2014 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -28,14 +28,15 @@
  Version 3.0 - Added option to send rpm raw data (time and count)
  Version 5.2 - Correction to retrieving scale sign bit.
  Version 5.2 - Corrected scale frequency clock.
- Version 5.2 - Added option to prescale tach reading compensating for more than one tach pulse per rotation.
+ Version 5.2 - Added option to pre-scale tach reading compensating for more than one tach pulse per rotation.
  Version 5.3 - Added option to average and round tach output values.
  Version 5.3 - Added option to select max tach update frequency
  Version 5.4 - Replace Yuriy's method of clocking scales with method written by Les Jones
  Version 5.5 - Optimizing the scale reading logic using method written by Les Jones
- Version 5.6 - Adding 4us delay between scale clock sygnal change and reading first axis data
+ Version 5.6 - Adding 4us delay between scale clock signal change and reading first axis data
  Version 5.7 - Added option to smooth DRO reading by implementing weighted average with automatic smoothing factor
  Version 5.8 - Correction to calculate average for scale X. Increase weighted average sample size to 32.
+ Version 5.9 - Reduce flickering on RPM display.  Remove long delay in RPM displaying Zero after the rotation stops.
  
  
  NOTE: This program supports pulse sensor to measure rpm.  
@@ -64,8 +65,8 @@
 		Default values = 3, 4, 5, 6 (for corresponding axis X, Y, Z and W)
 
 	SCALE_<n>_AVERAGE_ENABLED
-		Defines if DRO reading should be averaged using wighted average calculation with automating smoothing factor.   
-		If average is enabled the reading is is much stable without "jumping" and "flickering" when the scale "can't decide" on the value.  
+		Defines if DRO reading should be averaged using weighted average calculation with automating smoothing factor.   
+		If average is enabled the reading is much more stable without "jumping" and "flickering" when the scale "can't decide" on the value.  
 		Note: This value is not used when corresponding SCALE_<n>_ENABLED is 0 
 		Possible values:
 			0 = exact measured from the scale is sent
@@ -80,7 +81,7 @@
 		Recommended values:
 			16 for machines with power feed 
 			32 for all manual machines
-		Default value = 32
+		Default value = 24
 
 	TACH_ENABLED
 		Defines if tach sensor functionality should be supported.  
@@ -103,7 +104,9 @@
 	TACH_AVERAGE_COUNT
 		Defines the number of last tach readings that will be used to calculate average tach rpm.
 		If you want to send measured rpm instead of average rpm set this value to 1.
-		Note: This value is not used when TACH_RAW_DATA_FORMAT is enabled 
+		Note: This value is not used when TACH_RAW_DATA_FORMAT is enabled.
+		      It is recommended to set this value 2 times or more of TACH_PRESCALE value.
+		      For example: if TACH_PRESCALE = 4, set TACH_AVERAGE_COUNT = 8
 		Possible values:
 			1 = exact measured tach reading is sent
 			any integer number greater than 1 - average tach reading is sent 
@@ -151,7 +154,7 @@
 		Default value = 13 (on-board LED)
 
 	UART_BAUD_RATE
-		Defines the serial port boud rate.  Make sure it matches the Bluetooth module's boud rate.
+		Defines the serial port baud rate.  Make sure it matches the Bluetooth module's baud rate.
 		Recommended value:
 			1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200
 		Default value = 9600
@@ -168,7 +171,7 @@
 		      For example for UPDATE_FREQUENCY = 24 valid TACH_UPDATE_FREQUENCY are: 1, 2, 3, 4, 6, 8, 12 and 24 
 		Possible values:
 			any integer number between 1 and UPDATE_FREQUENCY 
-		Default value = 8
+		Default value = 4
 	
  */
  
@@ -194,15 +197,15 @@
 #define SCALE_W_AVERAGE_ENABLED 1
 
 // DRO rounding sample size.  Change it to 16 for machines with power feed
-#define AXIS_AVERAGE_COUNT 32
+#define AXIS_AVERAGE_COUNT 24
 
 // System config (if Tach is not connected change in the corresponding constant value from "1" to "0")
 #define TACH_ENABLED 1
 
-// Tach prescale value (number of tach sensor pulses per revolution)
+// Tach pre-scale value (number of tach sensor pulses per revolution)
 #define  TACH_PRESCALE 1
 
-// Number of tach measurments to average 
+// Number of tach measurements to average 
 #define TACH_AVERAGE_COUNT 6
 
 // This is 1% rounding for tachometer display (set to 0 to disable)
@@ -221,15 +224,15 @@
 // General Settings
 #define UART_BAUD_RATE 9600				//  Set this so it matches the BT module's BAUD rate 
 #define UPDATE_FREQUENCY 24				//  Frequency in Hz (number of timer per second the scales are read and the data is sent to the application)
-#define TACH_UPDATE_FREQUENCY 8			//  Max Frequency in Hz (number of timer per second) the tach output is sent to the application
+#define TACH_UPDATE_FREQUENCY 4 		//  Max Frequency in Hz (number of timer per second) the tach output is sent to the application
 
 //---END OF CONFIGURATION PARAMETERS ---
 
 
 //---DO NOT CHANGE THE CODE BELOW UNLESS YOU KNOW WHAT YOU ARE DOING ---
 
-/* iGaging Clock Settins (do not change) */
-#define SCALE_CLK_PULSES 21				//iGaging and Accuremote sclaes use 21 bit format
+/* iGaging Clock Settings (do not change) */
+#define SCALE_CLK_PULSES 21				//iGaging and Accuremote scales use 21 bit format
 #define SCALE_CLK_FREQUENCY 9000		//iGaging scales run at about 9-10KHz
 #define SCALE_CLK_DUTY 20				// iGaging scales clock run at 20% PWM duty (22us = ON out of 111us cycle)
 
@@ -429,7 +432,7 @@ long const slowSc = ((long) 2000) / (((long) FILTER_SLOW_EMA) + ((long) 1));
 long const fastSc = ((long) 20) / (((long) FILTER_FAST_EMA) + ((long) 1));
 
 #if TACH_UPDATE_FREQUENCY == UPDATE_FREQUENCY
-int const tachUpdateFrequencyCounterLimit = 0;
+int const tachUpdateFrequencyCounterLimit = 1;
 #else
 int const tachUpdateFrequencyCounterLimit = (((long) UPDATE_FREQUENCY) / ((long) TACH_UPDATE_FREQUENCY));
 #endif
@@ -455,6 +458,7 @@ volatile int tachLastReadPosition;
 #endif
 
 volatile int tachUpdateFrequencyCounter;
+volatile boolean sendTachData;
 
 //variables that will store the DRO readout
 volatile boolean tickTimerFlag;
@@ -507,6 +511,7 @@ volatile long axisAMAValueW;
 void setup()
 {
 	cli();
+	sendTachData = false;
 	tickTimerFlag = false;
 	updateFrequencyCounter = 0;
 
@@ -580,7 +585,7 @@ void setup()
 	for (tachLastReadPosition = 0; tachLastReadPosition < (int) TACH_AVERAGE_COUNT; tachLastReadPosition++) {
 		tachLastRead[tachLastReadPosition] = 0;
 	}
-	tachLastReadPosition = 0;
+	tachLastReadPosition = TACH_AVERAGE_COUNT - 1;
 #endif
 	tachUpdateFrequencyCounter = 0;
 
@@ -648,13 +653,18 @@ void loop()
 		// print Tach rpm to serial port
 #if TACH_ENABLED > 0
 
+		// Calculate tach data
+		sendTachData = sendTachOutputData() || sendTachData;
+
 		// Check tach reporting frequency
 		tachUpdateFrequencyCounter++;
 		if (tachUpdateFrequencyCounter >= tachUpdateFrequencyCounterLimit) {
 			tachUpdateFrequencyCounter = 0;
 
 			// Output tach data
-			if (sendTachOutputData()) {
+			if (sendTachData) {
+				sendTachData = false;
+
 				Serial.print(F("T"));
 #if TACH_RAW_DATA_FORMAT > 0
 				Serial.print((unsigned long)tachReadoutMicrosec);
@@ -1001,20 +1011,38 @@ inline boolean sendTachOutputData()
 #if TACH_AVERAGE_COUNT > 1
 	// calculate Average RPM
 	unsigned long tachReadSum;
+	unsigned long tachLastReadRpm;
 	int readCounter;
-	// Rotate tachLastReadPosition
+	int readCounted;
+
+	// Save last reading
+	tachLastReadRpm = tachLastRead[tachLastReadPosition];
+	
+	// Increment tachLastReadPosition
+	tachLastReadPosition++;
 	if (tachLastReadPosition == (int) TACH_AVERAGE_COUNT) {
 		tachLastReadPosition = 0;
 	}
-	// Save current read and increment position 
+	// Save current read 
 	tachLastRead[tachLastReadPosition] = tachReadoutRpm;
-	tachLastReadPosition++;
-	// Calculate average read
+
+	// At least two consecutive measurements must be valid to calculate average
+	readCounted = 0;
 	tachReadSum = 0;
-	for (readCounter = 0; readCounter < (int) TACH_AVERAGE_COUNT; readCounter++) {
-		tachReadSum = tachReadSum + tachLastRead[readCounter];
+	if (tachReadoutRpm != 0 && tachLastReadRpm != 0) { 
+		// Calculate average read
+		for (readCounter = 0; readCounter < (int) TACH_AVERAGE_COUNT; readCounter++) {
+			if (tachLastRead[readCounter] != 0) {
+				tachReadSum = tachReadSum + tachLastRead[readCounter];
+				readCounted++;
+			}
+		}
 	}
-	tachReadoutRpm = ((unsigned long) tachReadSum / ((int) TACH_AVERAGE_COUNT));
+	if (readCounted != 0) {
+		tachReadoutRpm = ((unsigned long) tachReadSum / ((int) readCounted));
+	} else {
+		tachReadoutRpm = 0;
+	}
 #endif
 
 #if TACH_ROUND > 0
