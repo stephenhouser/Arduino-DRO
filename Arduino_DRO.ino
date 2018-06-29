@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.7
+ ArduinoDRO + Tach V5.8
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 23 October 2014 by Ryszard Malinowski
+ Updated 14 November 2014 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -35,6 +35,7 @@
  Version 5.5 - Optimizing the scale reading logic using method written by Les Jones
  Version 5.6 - Adding 4us delay between scale clock sygnal change and reading first axis data
  Version 5.7 - Added option to smooth DRO reading by implementing weighted average with automatic smoothing factor
+ Version 5.8 - Correction to calculate average for scale X. Increase weighted average sample size to 32.
  
  
  NOTE: This program supports pulse sensor to measure rpm.  
@@ -70,6 +71,16 @@
 			0 = exact measured from the scale is sent
 			1 = scale reading averaged using weighted average calculation with automatic smoothing factor
 		Default value = 1
+
+	AXIS_AVERAGE_COUNT
+		Defines the number of last DRO readings that will be used to calculate weighted average for DRO.
+		For machines with power feed on any axis change this value to lower number i.e. 8 or 16.
+		Possible values:
+			integer number between 4 and 32 
+		Recommended values:
+			16 for machines with power feed 
+			32 for all manual machines
+		Default value = 32
 
 	TACH_ENABLED
 		Defines if tach sensor functionality should be supported.  
@@ -182,6 +193,9 @@
 #define SCALE_Z_AVERAGE_ENABLED 1
 #define SCALE_W_AVERAGE_ENABLED 1
 
+// DRO rounding sample size.  Change it to 16 for machines with power feed
+#define AXIS_AVERAGE_COUNT 32
+
 // System config (if Tach is not connected change in the corresponding constant value from "1" to "0")
 #define TACH_ENABLED 1
 
@@ -220,9 +234,8 @@
 #define SCALE_CLK_DUTY 20				// iGaging scales clock run at 20% PWM duty (22us = ON out of 111us cycle)
 
 /* weighted average constants */ 
-#define AXIS_AVERAGE_COUNT 32			// if igaging can't decide between two numbers then lock to the last number
-#define FILTER_SLOW_EMA 32				// Slow movement EMA
-#define FILTER_FAST_EMA 2 				// Fast movement EMA
+#define FILTER_SLOW_EMA AXIS_AVERAGE_COUNT	// Slow movement EMA
+#define FILTER_FAST_EMA 2 					// Fast movement EMA
 
 
 #if (SCALE_X_ENABLED > 0) || (SCALE_Y_ENABLED > 0) || (SCALE_Z_ENABLED > 0) || (SCALE_W_ENABLED > 0)
@@ -595,7 +608,7 @@ void loop()
 		//print DRO positions to the serial port
 #if SCALE_X_ENABLED > 0
 #if SCALE_X_AVERAGE_ENABLED > 0
-		scaleValueRounded(yReportedValue, axisLastReadX, axisLastReadPositionX, axisAMAValueX);
+		scaleValueRounded(xReportedValue, axisLastReadX, axisLastReadPositionX, axisAMAValueX);
 #endif
 		Serial.print(F("X"));
 		Serial.print((long)xReportedValue);
