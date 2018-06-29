@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.6
+ ArduinoDRO + Tach V5.7
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 9 September 2014 by Ryszard Malinowski
+ Updated 23 October 2014 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -34,6 +34,7 @@
  Version 5.4 - Replace Yuriy's method of clocking scales with method written by Les Jones
  Version 5.5 - Optimizing the scale reading logic using method written by Les Jones
  Version 5.6 - Adding 4us delay between scale clock sygnal change and reading first axis data
+ Version 5.7 - Added option to smooth DRO reading by implementing weighted average with automatic smoothing factor
  
  
  NOTE: This program supports pulse sensor to measure rpm.  
@@ -60,6 +61,15 @@
 		Possible values:
 			integer number between 2 and 13
 		Default values = 3, 4, 5, 6 (for corresponding axis X, Y, Z and W)
+
+	SCALE_<n>_AVERAGE_ENABLED
+		Defines if DRO reading should be averaged using wighted average calculation with automating smoothing factor.   
+		If average is enabled the reading is is much stable without "jumping" and "flickering" when the scale "can't decide" on the value.  
+		Note: This value is not used when corresponding SCALE_<n>_ENABLED is 0 
+		Possible values:
+			0 = exact measured from the scale is sent
+			1 = scale reading averaged using weighted average calculation with automatic smoothing factor
+		Default value = 1
 
 	TACH_ENABLED
 		Defines if tach sensor functionality should be supported.  
@@ -166,6 +176,12 @@
 #define SCALE_Z_PIN 5
 #define SCALE_W_PIN 6
 
+// DRO rounding On/Off (if not enabled change in the corresponding constant value from "1" to "0")
+#define SCALE_X_AVERAGE_ENABLED 1
+#define SCALE_Y_AVERAGE_ENABLED 1
+#define SCALE_Z_AVERAGE_ENABLED 1
+#define SCALE_W_AVERAGE_ENABLED 1
+
 // System config (if Tach is not connected change in the corresponding constant value from "1" to "0")
 #define TACH_ENABLED 1
 
@@ -203,11 +219,22 @@
 #define SCALE_CLK_FREQUENCY 9000		//iGaging scales run at about 9-10KHz
 #define SCALE_CLK_DUTY 20				// iGaging scales clock run at 20% PWM duty (22us = ON out of 111us cycle)
 
+/* weighted average constants */ 
+#define AXIS_AVERAGE_COUNT 32			// if igaging can't decide between two numbers then lock to the last number
+#define FILTER_SLOW_EMA 32				// Slow movement EMA
+#define FILTER_FAST_EMA 2 				// Fast movement EMA
+
 
 #if (SCALE_X_ENABLED > 0) || (SCALE_Y_ENABLED > 0) || (SCALE_Z_ENABLED > 0) || (SCALE_W_ENABLED > 0)
 #define DRO_ENABLED 1
 #else
 #define DRO_ENABLED 0
+#endif
+
+#if (SCALE_X_AVERAGE_ENABLED > 0) || (SCALE_Y_AVERAGE_ENABLED > 0) || (SCALE_Z_AVERAGE_ENABLED > 0) || (SCALE_W_AVERAGE_ENABLED > 0)
+#define SCALE_AVERAGE_ENABLED 1
+#else
+#define SCALE_AVERAGE_ENABLED 0
 #endif
 
 // Define registers and pins for ports
@@ -383,6 +410,10 @@
 
 // Some constants calculated here
 unsigned long const minRpmTime = (((long) MIN_RPM_DELAY) * ((long) 1000));
+long const longMax = __LONG_MAX__;
+long const longMin = (- __LONG_MAX__ - (long) 1);
+long const slowSc = ((long) 2000) / (((long) FILTER_SLOW_EMA) + ((long) 1));
+long const fastSc = ((long) 20) / (((long) FILTER_FAST_EMA) + ((long) 1));
 
 #if TACH_UPDATE_FREQUENCY == UPDATE_FREQUENCY
 int const tachUpdateFrequencyCounterLimit = 0;
@@ -392,9 +423,7 @@ int const tachUpdateFrequencyCounterLimit = (((long) UPDATE_FREQUENCY) / ((long)
 
 int const updateFrequencyCounterLimit = (int) (((unsigned long) SCALE_CLK_FREQUENCY) /((unsigned long) UPDATE_FREQUENCY));
 int const clockCounterLimit = (int) (((unsigned long) 2000000) / (unsigned long) SCALE_CLK_FREQUENCY) - 10;
-#if DRO_ENABLED > 0
 int const scaleClockDutyLimit = (int) (((unsigned long) 20000) * ((unsigned long) SCALE_CLK_DUTY) / (unsigned long) SCALE_CLK_FREQUENCY);
-#endif
 
 //variables that will store tach info and status
 volatile unsigned long tachInterruptTimer;
@@ -423,20 +452,41 @@ volatile int updateFrequencyCounter;
 volatile long xValue;
 volatile long xReportedValue;
 #endif
+#if SCALE_X_AVERAGE_ENABLED > 0
+volatile long axisLastReadX[AXIS_AVERAGE_COUNT];
+volatile int axisLastReadPositionX;
+volatile long axisAMAValueX;
+#endif
+
 #if SCALE_Y_ENABLED > 0
 volatile long yValue;
 volatile long yReportedValue;
 #endif
+#if SCALE_Y_AVERAGE_ENABLED > 0
+volatile long axisLastReadY[AXIS_AVERAGE_COUNT];
+volatile int axisLastReadPositionY;
+volatile long axisAMAValueY;
+#endif
+
 #if SCALE_Z_ENABLED > 0
 volatile long zValue;
 volatile long zReportedValue;
 #endif
+#if SCALE_Z_AVERAGE_ENABLED > 0
+volatile long axisLastReadZ[AXIS_AVERAGE_COUNT];
+volatile int axisLastReadPositionZ;
+volatile long axisAMAValueZ;
+#endif
+
 #if SCALE_W_ENABLED > 0
 volatile long wValue;
 volatile long wReportedValue;
 #endif
-
-
+#if SCALE_W_AVERAGE_ENABLED > 0
+volatile long axisLastReadW[AXIS_AVERAGE_COUNT];
+volatile int axisLastReadPositionW;
+volatile long axisAMAValueW;
+#endif
 
 
 
@@ -460,25 +510,36 @@ void setup()
 		X_DDR &= ~_BV(X_PIN_BIT);
 	xValue = 0L;
 	xReportedValue = 0L;
+#if SCALE_X_AVERAGE_ENABLED > 0
+	initializeAxisAverage(axisLastReadX, axisLastReadPositionX, axisAMAValueX);
+#endif
 #endif
 #if SCALE_Y_ENABLED > 0
-		Y_DDR &= ~_BV(Y_PIN_BIT);
+	Y_DDR &= ~_BV(Y_PIN_BIT);
 	yValue = 0L;
 	yReportedValue = 0L;
+#if SCALE_Y_AVERAGE_ENABLED > 0
+	initializeAxisAverage(axisLastReadY, axisLastReadPositionY, axisAMAValueY);
+#endif
 #endif
 #if SCALE_Z_ENABLED > 0
 		Z_DDR &= ~_BV(Z_PIN_BIT);
 	zValue = 0L;
 	zReportedValue = 0L;
+#if SCALE_Z_AVERAGE_ENABLED > 0
+	initializeAxisAverage(axisLastReadZ, axisLastReadPositionZ, axisAMAValueZ);
+#endif
 #endif
 #if SCALE_W_ENABLED > 0
-		W_DDR &= ~_BV(W_PIN_BIT);
+	W_DDR &= ~_BV(W_PIN_BIT);
 	wValue = 0L;
 	wReportedValue = 0L;
+#if SCALE_W_AVERAGE_ENABLED > 0
+	initializeAxisAverage(axisLastReadW, axisLastReadPositionW, axisAMAValueW);
+#endif
 #endif
 
 #endif
-	
 
 	//initialize tach values
 #if TACH_ENABLED > 0
@@ -533,27 +594,43 @@ void loop()
 #if DRO_ENABLED > 0
 		//print DRO positions to the serial port
 #if SCALE_X_ENABLED > 0
+#if SCALE_X_AVERAGE_ENABLED > 0
+		scaleValueRounded(yReportedValue, axisLastReadX, axisLastReadPositionX, axisAMAValueX);
+#endif
 		Serial.print(F("X"));
 		Serial.print((long)xReportedValue);
 		Serial.print(F(";"));
 #endif
+
 #if SCALE_Y_ENABLED > 0
+#if SCALE_Y_AVERAGE_ENABLED > 0
+		scaleValueRounded(yReportedValue, axisLastReadY, axisLastReadPositionY, axisAMAValueY);
+#endif
 		Serial.print(F("Y"));
 		Serial.print((long)yReportedValue);
 		Serial.print(F(";"));
 #endif
+
 #if SCALE_Z_ENABLED > 0
+#if SCALE_Z_AVERAGE_ENABLED > 0
+		scaleValueRounded(zReportedValue, axisLastReadZ, axisLastReadPositionZ, axisAMAValueZ);
+#endif
 		Serial.print(F("Z"));
 		Serial.print((long)zReportedValue);
 		Serial.print(F(";"));
 #endif
+
 #if SCALE_W_ENABLED > 0
+#if SCALE_W_AVERAGE_ENABLED > 0
+		scaleValueRounded(wReportedValue, axisLastReadW, axisLastReadPositionW, axisAMAValueW);
+#endif
 		Serial.print(F("W"));
 		Serial.print((long)wReportedValue);
 		Serial.print(F(";"));
 #endif
 
 #endif
+
 
 		// print Tach rpm to serial port
 #if TACH_ENABLED > 0
@@ -721,13 +798,126 @@ ISR(TIMER2_COMPA_vect)
 #endif
 	
 	updateFrequencyCounter++;
-
 	// Start of next cycle 
 	if ( updateFrequencyCounter >= updateFrequencyCounterLimit) {
 		updateFrequencyCounter = 0;
 	}
 
 }
+
+
+#if DRO_ENABLED > 0
+#if SCALE_AVERAGE_ENABLED > 0
+inline void	initializeAxisAverage(volatile long axisLastRead[], volatile int &axisLastReadPosition, volatile long &axisAMAValue) {
+	
+	for (axisLastReadPosition = 0; axisLastReadPosition < (int) AXIS_AVERAGE_COUNT; axisLastReadPosition++) {
+		axisLastRead[axisLastReadPosition] = 0;
+	}
+	axisLastReadPosition = 0;
+	axisAMAValue = 0;
+
+}
+
+inline void scaleValueRounded(volatile long &ReportedValue, volatile long axisLastRead[], volatile int &axisLastReadPosition, volatile long &axisAMAValue)
+{
+
+	int last_pos; 
+	int first_pos;
+	int prev_pos;
+	int filter_pos;
+
+
+	long dir;
+	long minValue = longMax;
+	long maxValue = longMin;
+	long volatility = 0;
+	long valueRange;
+	long ssc;
+	long constant;
+	long delta;
+
+	// Save current read and increment position 
+	axisLastRead[axisLastReadPosition] = ReportedValue;
+	last_pos = axisLastReadPosition;
+
+	axisLastReadPosition++;
+	if (axisLastReadPosition == (int) AXIS_AVERAGE_COUNT) {
+		axisLastReadPosition = 0;
+	}
+	first_pos = axisLastReadPosition;
+	
+    dir = (axisLastRead[first_pos] - axisLastRead[last_pos]) * ((long) 100);
+
+    // Calculate the volatility in the counts by taking the sum of the differences
+    prev_pos = first_pos;
+    for (filter_pos = (first_pos + 1) % AXIS_AVERAGE_COUNT;
+         filter_pos != first_pos;
+         filter_pos = (filter_pos + 1) % AXIS_AVERAGE_COUNT)
+    {
+        minValue = MIN(minValue, axisLastRead[filter_pos]);
+        maxValue = MAX(maxValue, axisLastRead[filter_pos]);
+        volatility += ABS(axisLastRead[filter_pos] - axisLastRead[prev_pos]);
+        prev_pos = filter_pos;
+    }
+
+    // Just return the read if there is no volatility to avoid divide by 0
+    if (volatility == (long) 0)
+    {
+		axisAMAValue = axisLastRead[last_pos] * ((long) 100);
+		return;
+    }
+	
+    // If the last AMA is not within twice the sample range, then assume the position jumped
+    // and reset the AMA to the current read
+	maxValue = maxValue * ((long) 100);
+	minValue = minValue * ((long) 100);
+    valueRange = maxValue - minValue;
+    if (axisAMAValue > maxValue + valueRange + ((long) 100) ||
+        axisAMAValue < minValue - valueRange - ((long) 100))
+    {
+		axisAMAValue = axisLastRead[last_pos] * ((long) 100);
+		return;
+    }
+
+    // Calculate the smoothing constant
+    ssc = (ABS(dir / volatility) * fastSc) + slowSc;
+    constant = (ssc * ssc) / ((long) 10000);
+
+    // Calculate the new average
+	delta = axisLastRead[last_pos] - (axisAMAValue / ((long) 100));
+	axisAMAValue = axisAMAValue + constant * delta; 
+
+    ReportedValue = (axisAMAValue + ((long) 50)) / ((long) 100);
+	return;
+
+}
+
+inline long MIN(long value1, long value2){
+	if(value1 > value2) {
+		return value2;
+	} else {
+		return value1;
+	}
+}
+
+inline long MAX(long value1, long value2){
+	if(value1 > value2) {
+		return value1;
+	} else {
+		return value2;
+	}
+}
+
+inline long ABS(long value){
+	if(value < 0) {
+		return -value;
+	} else {
+		return value;
+	}
+}
+
+#endif
+#endif
 
 
 // Calculate the tach rpm 
