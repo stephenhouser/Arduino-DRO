@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.4
+ ArduinoDRO + Tach V5.5
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 10 August 2014 by Ryszard Malinowski
+ Updated 17 August 2014 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -32,6 +32,8 @@
  Version 5.3 - Added option to average and round tach output values.
  Version 5.3 - Added option to select max tach update frequency
  Version 5.4 - Replace Yuriy's method of clocking scales with method written by Les Jones
+ Version 5.5 - Optimizing the scale reading logic using method written by Les Jones
+ 
  
  NOTE: This program supports pulse sensor to measure rpm.  
  
@@ -413,7 +415,6 @@ volatile int tachUpdateFrequencyCounter;
 
 //variables that will store the DRO readout
 volatile boolean tickTimerFlag;
-volatile byte bitOffset ;
 volatile int updateFrequencyCounter;
 
 // Axis count
@@ -443,7 +444,6 @@ void setup()
 {
 	cli();
 	tickTimerFlag = false;
-	bitOffset = 0;
 	updateFrequencyCounter = 0;
 
 // Initialize DRO values
@@ -583,7 +583,6 @@ void loop()
 //initializes clock timer
 void setupClkTimer()
 {
-	bitOffset = 0;
 	updateFrequencyCounter = 0;
 
 	TCCR2A = 0;			// set entire TCCR2A register to 0
@@ -624,8 +623,8 @@ ISR(TIMER2_COMPB_vect) {
 	// Set counter back to zero  
 	TCNT2  = 0;  
 #if DRO_ENABLED > 0
-	// Only set the clock high if bitOffset less than 21
-	if (bitOffset < SCALE_CLK_PULSES) {
+	// Only set the clock high if updateFrequencyCounter less than 21
+	if (updateFrequencyCounter < SCALE_CLK_PULSES) {
 		// Set clock pin high
 		SCALE_CLK_OUTPUT_PORT |= _BV(CLK_PIN_BIT);
 	}
@@ -637,79 +636,89 @@ ISR(TIMER2_COMPB_vect) {
 ISR(TIMER2_COMPA_vect) 
 {
 #if DRO_ENABLED > 0
-	// Set clock low
-	SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
 
-	//read the pin state and shift it into the appropriate variables
-	if (bitOffset < SCALE_CLK_PULSES - 1) {
+	// Contorl the scale clock for only first 21 loops
+	if (updateFrequencyCounter < SCALE_CLK_PULSES) {
+	
+		// Set clock low
+		SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
+
+		// read the pin state and shift it into the appropriate variables
+		// Logic by Les Jones:
+		//	If data pin is HIGH set bit 20th of the axis value to '1'.  Then shift axis value one bit to the right
+		//  This is called 20 times (for bits received from 0 to 19)
+		if (updateFrequencyCounter < SCALE_CLK_PULSES - 1) {
 #if SCALE_X_ENABLED > 0
-		xValue |= ((long)(X_INPUT_PORT & _BV(X_PIN_BIT) ? 1 : 0) << bitOffset);
+			if (X_INPUT_PORT & _BV(X_PIN_BIT))
+				xValue |= ((long)0x00100000 );
+			xValue >>= 1;
 #endif
 
 #if SCALE_Y_ENABLED > 0
-		yValue |= ((long)(Y_INPUT_PORT & _BV(Y_PIN_BIT) ? 1 : 0) << bitOffset);
+			if (Y_INPUT_PORT & _BV(Y_PIN_BIT))
+				yValue |= ((long)0x00100000 );
+			yValue >>= 1;
 #endif
 
 #if SCALE_Z_ENABLED > 0
-		zValue |= ((long)(Z_INPUT_PORT & _BV(Z_PIN_BIT) ? 1 : 0) << bitOffset);
+			if (Z_INPUT_PORT & _BV(Z_PIN_BIT))
+				zValue |= ((long)0x00100000 );
+			zValue >>= 1;
 #endif
 
 #if SCALE_W_ENABLED > 0
-		wValue |= ((long)(W_INPUT_PORT & _BV(W_PIN_BIT) ? 1 : 0) << bitOffset);
+			if (W_INPUT_PORT & _BV(W_PIN_BIT))
+				wValue |= ((long)0x00100000 );
+			wValue >>= 1;
 #endif
 
 
-	} else if (bitOffset == SCALE_CLK_PULSES - 1) {
+		} else if (updateFrequencyCounter == SCALE_CLK_PULSES - 1) {
 
-		//stop the timer after the predefined number of pulses
+			//If 21-st bit is 'HIGH' inverse the sign of the axis readout
 #if SCALE_X_ENABLED > 0
-		if (X_INPUT_PORT & _BV(X_PIN_BIT))
-			xValue |= ((long)0xfff << 20);
-		xReportedValue = xValue;
-		xValue = 0L;
+			if (X_INPUT_PORT & _BV(X_PIN_BIT))
+				xValue |= ((long)0xfff00000);
+			xReportedValue = xValue;
+			xValue = 0L;
 #endif
 
 #if SCALE_Y_ENABLED > 0
-		if (Y_INPUT_PORT & _BV(Y_PIN_BIT))
-			yValue |= ((long)0xfff << 20);
-		yReportedValue = yValue;
-		yValue = 0L;
+			if (Y_INPUT_PORT & _BV(Y_PIN_BIT))
+				yValue |= ((long)0xfff00000);
+			yReportedValue = yValue;
+			yValue = 0L;
 #endif
 
 #if SCALE_Z_ENABLED > 0
-		if (Z_INPUT_PORT & _BV(Z_PIN_BIT))
-			zValue |= ((long)0xfff << 20);
-		zReportedValue = zValue;
-		zValue = 0L;
+			if (Z_INPUT_PORT & _BV(Z_PIN_BIT))
+				zValue |= ((long)0xfff00000);
+			zReportedValue = zValue;
+			zValue = 0L;
 #endif
 
 #if SCALE_W_ENABLED > 0
-		if (W_INPUT_PORT & _BV(W_PIN_BIT))
-			wValue |= ((long)0xfff << 20);
-		wReportedValue = wValue;
-		wValue = 0L;
+			if (W_INPUT_PORT & _BV(W_PIN_BIT))
+				wValue |= ((long)0xfff00000);
+			wReportedValue = wValue;
+			wValue = 0L;
 #endif
-		// Tell the main loop, that it's time to sent data
-		tickTimerFlag = true;
+			// Tell the main loop, that it's time to sent data
+			tickTimerFlag = true;
 
+		}
 	}
 #else
-	if (bitOffset == 0) {
+	if (updateFrequencyCounter == 0) {
 		// Tell the main loop, that it's time to sent data
 		tickTimerFlag = true;
 	}
 #endif
-
-	//increment the bit offset
-	if (bitOffset < SCALE_CLK_PULSES) {
-		bitOffset++;
-	}
 	
 	updateFrequencyCounter++;
 
 	// Start of next cycle 
 	if ( updateFrequencyCounter >= updateFrequencyCounterLimit) {
-		bitOffset = 0;
 		updateFrequencyCounter = 0;
 	}
 
