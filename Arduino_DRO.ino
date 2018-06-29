@@ -1,12 +1,12 @@
 /*
- ArduinoDRO + Tach V3
+ ArduinoDRO + Tach V4
  
  Reading Grizzly iGaging Digital Scales V2.1 Created 19 January 2012
  Updated 03 April 2013
  by Yuriy Krushelnytskiy
  http://www.yuriystoys.com
  
- Updated 01 June 2014 by Ryszard Malinowski
+ Updated 07 July 2014 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
- Added support for tachometer on axis T (input pin 7)
+ Added support for tachometer on axis T (input pin 7) handled by interrupt routine
 
  NOTE: This program supports hall-sensor to measure rpm.  The tach output format for Android DRO is T<time>/<retation>.
  Android DRO application must support this format for axis T.
@@ -84,7 +84,6 @@
 	
  */
  
-
 // DRO config (if axis is not connected change in the corresponding constant value from "true" to "false")
 boolean const xAxisSupported = true;
 boolean const yAxisSupported = true;
@@ -114,13 +113,17 @@ long const minRpmDelay = 1200;			// 1.2 sec calculates to low range = 50 rpm.
 
 
 boolean const droSupported = (xAxisSupported || yAxisSupported || zAxisSupported || wAxisSupported);
+
+boolean const tachInterrupt2 = (tachPin >= 2 && tachPin <= 7);
+boolean const tachInterrupt0 = (tachPin >= 8 && tachPin <= 13);
+
 long const minRpmTime = (minRpmDelay * 1000);
 
 //variables that will store tach info and status
-volatile int lastTachPinStatus;
+volatile long tachInterruptTimer;
+volatile long tachInterruptRotationCount;
+
 volatile long tachTimerStart;
-volatile long tachTimerStop;
-volatile long tachRotationCount;
 
 //variables that will store the readout output
 volatile long tachReadoutRotationCount;
@@ -128,7 +131,7 @@ volatile long tachReadoutMicrosec;
 volatile boolean tachReadoutSendData;
 
 
-//variables that will store the readout
+//variables that will store the DRO readout
 volatile long xCoord;
 volatile long yCoord;
 volatile long zCoord;
@@ -138,7 +141,7 @@ volatile long wCoord;
 //The setup function is called once at startup of the sketch
 void setup()
 {
-		//clock pin should be set as output
+	//clock pin should be set as output
 	if (droSupported)
 		pinMode(clockPin, OUTPUT);
 
@@ -155,25 +158,66 @@ void setup()
 	if (wAxisSupported)
 		pinMode(wDataPin, INPUT);
 
+	//initialize tach values
 	if (tachSupported) {
 		pinMode(tachPin, INPUT);
 		pinMode(tachLedFeedbackPin, OUTPUT);
+		// switch interrupts off while messing with their settings  
+		cli();
+		tachInterruptRotationCount = 0;
+		tachInterruptTimer = micros();
+		
+		tachTimerStart = tachInterruptTimer;
+
+		tachReadoutRotationCount = 0;
+		tachReadoutMicrosec = 0;
+		tachReadoutSendData = false;
+
+		// Setup interrupt on tach pin
+		if (tachPin == 2) {
+			PCICR |= _BV(PCIE2);	// Enable interrupt PCINT2
+			PCMSK2 |= _BV(PCINT18); //Trigger on change of Pin D2
+		} else if (tachPin == 3) {
+			PCICR |= _BV(PCIE2);	// Enable interrupt PCINT2
+			PCMSK2 |= _BV(PCINT19); //Trigger on change of Pin D3
+		} else if (tachPin == 4) {
+			PCICR |= _BV(PCIE2);	// Enable interrupt PCINT2
+			PCMSK2 |= _BV(PCINT20); //Trigger on change of Pin D4
+		} else if (tachPin == 5) {
+			PCICR |= _BV(PCIE2);	// Enable interrupt PCINT2
+			PCMSK2 |= _BV(PCINT21); //Trigger on change of Pin D5
+		} else if (tachPin == 6) {
+			PCICR |= _BV(PCIE2);	// Enable interrupt PCINT2
+			PCMSK2 |= _BV(PCINT22); //Trigger on change of Pin D6
+		} else if (tachPin == 7) {
+			PCICR |= _BV(PCIE2);	// Enable interrupt PCINT2
+			PCMSK2 |= _BV(PCINT23); //Trigger on change of Pin D7
+		} else if (tachPin == 8) {
+			PCICR |= _BV(PCIE0);	// Enable interrupt PCINT0
+			PCMSK2 |= _BV(PCINT0); //Trigger on change of Pin D8
+		} else if (tachPin == 9) {
+			PCICR |= _BV(PCIE0);	// Enable interrupt PCINT0
+			PCMSK2 |= _BV(PCINT1); //Trigger on change of Pin D9
+		} else if (tachPin == 10) {
+			PCICR |= _BV(PCIE0);	// Enable interrupt PCINT0
+			PCMSK2 |= _BV(PCINT2); //Trigger on change of Pin D10
+		} else if (tachPin == 11) {
+			PCICR |= _BV(PCIE0);	// Enable interrupt PCINT0
+			PCMSK2 |= _BV(PCINT3); //Trigger on change of Pin D11
+		} else if (tachPin == 12) {
+			PCICR |= _BV(PCIE0);	// Enable interrupt PCINT0
+			PCMSK2 |= _BV(PCINT4); //Trigger on change of Pin D12
+		} else if (tachPin == 13) {
+			PCICR |= _BV(PCIE0);	// Enable interrupt PCINT0
+			PCMSK2 |= _BV(PCINT5); //Trigger on change of Pin D13
+		}
+		sei();	
 	}
 
 
 	//initialize serial port
 	Serial.begin(9600);
 
-	//initialize tach values
-	if (tachSupported) {
-		lastTachPinStatus = digitalRead(tachPin);
-		tachTimerStop = micros();
-		tachTimerStart = tachTimerStop;
-		tachRotationCount = 0;
-		tachReadoutRotationCount = 0;
-		tachReadoutMicrosec = 0;
-		tachReadoutSendData = false;
-	}
 
 }
 
@@ -182,7 +226,6 @@ void setup()
 void loop()
 {
 
-//readTach() is called so often to provide the greatest accuracy
 	if (droSupported)
 	{
 		xCoord = 0;
@@ -207,8 +250,6 @@ void loop()
 			if (wAxisSupported)
 				wCoord |= ((long)digitalRead(wDataPin)<<bitOffset);
 
-			if (tachSupported)
-				readTach();
 		}
 
 		tickTock();
@@ -235,53 +276,27 @@ void loop()
 				wCoord |= ((long)0x7ff << 21);
 		}
 
-		if (tachSupported)
-			readTach();
 	
 		//print DRO positions to the serial port
 		if (xAxisSupported){
 			Serial.print("X");
-			if (tachSupported)
-				readTach();
 			Serial.print((long)xCoord);
-			if (tachSupported)
-				readTach();
 			Serial.print(";");
-			if (tachSupported)
-				readTach();
 		}
 		if (yAxisSupported){
 			Serial.print("Y");
-			if (tachSupported)
-				readTach();
 			Serial.print((long)yCoord);
-			if (tachSupported)
-				readTach();
 			Serial.print(";");
-			if (tachSupported)
-				readTach();
 		}
 		if (zAxisSupported){
 			Serial.print("Z");
-			if (tachSupported)
-				readTach();
 			Serial.print((long)zCoord);
-			if (tachSupported)
-				readTach();
 			Serial.print(";");
-			if (tachSupported)
-				readTach();
 		}
 		if (wAxisSupported){
 			Serial.print("W");
-			if (tachSupported)
-				readTach();
 			Serial.print((long)wCoord);
-			if (tachSupported)
-				readTach();
 			Serial.print(";");
-			if (tachSupported)
-				readTach();
 		}
 	}
 
@@ -289,27 +304,20 @@ void loop()
 	if (tachSupported) {
 		// Format tach average
 		formatTachOutput();
-		readTach();
 
 	// output tach data
 		if (tachReadoutSendData) {
 			Serial.print("T");
-			readTach();
 			Serial.print((long)tachReadoutMicrosec);
-			readTach();
 			Serial.print("/");
-			readTach();
 			Serial.print((long)tachReadoutRotationCount);
-			readTach();
 			Serial.print(";");
 			tachReadoutSendData = false;
 		}
 
 	//give the scales time to become ready again but continue reading tach input;
-		readTachLoop(50);
-	} else {
-		delay(50);
 	}
+	delay(50);
 }
 
 
@@ -337,63 +345,35 @@ inline void tickTock()
 }
 
 
-// Check tach port and record time if port input is changed
-inline void readTach()
-{
-	if (tachSupported) {
-
-		// read tach port and output it to LED
-		int tachPinStat = digitalRead(tachPin);
-		long tachTimer = micros();
-		digitalWrite(tachLedFeedbackPin, tachPinStat);
-
-		// record timestamp of change in port input
-		if (lastTachPinStatus != tachPinStat) {
-			lastTachPinStatus = tachPinStat;
-			// count pulses till full rotation
-			if (tachPinStat == LOW) {
-				tachTimerStop = tachTimer;
-				tachRotationCount++;
-				// reset timer if clock overlapses
-				if (tachTimerStop < tachTimerStart) {
-					tachTimerStart = tachTimerStop;
-					tachRotationCount = 0;
-				}
-			}
-		}
-	}
-}
-
-
-// Loop specified time (in milliseconds) just checking tach port
-inline void readTachLoop(unsigned long delay)
-{
-	if (tachSupported) {
-		unsigned long timerStart = millis();
-		do {
-			readTach();
-			// reset timer if clock overlapses
-			if (timerStart > millis())
-				timerStart = millis();
-		} while (timerStart + delay > millis());
-	}
-}
-
-
 // Calculate the tach rpm 
 inline void formatTachOutput()
 {
 	if (tachSupported) {
 		long microSeconds;
+		long tachRotationCount;
+		long tachTimer;
 
+
+		// Read data from the last interrupt (stop interupts to read a pair in sync)
+		cli();
+		tachRotationCount = tachInterruptRotationCount;
+		tachInterruptRotationCount = 0;
+		tachTimer = tachInterruptTimer;
+		sei();
+		
+		// reset values and ignore this readout if clock or rotation counter overlapses
+		if (tachTimer < tachTimerStart) {
+			tachTimerStart = tachTimer;
+			return;
+		}
+		
 		// We have at least one tick on rpm sensor so calculate the average time between ticks
 		if (tachRotationCount != 0) {
 			tachReadoutRotationCount = tachRotationCount;
-			tachReadoutMicrosec = tachTimerStop - tachTimerStart;
+			tachReadoutMicrosec = tachTimer - tachTimerStart;
 			tachReadoutSendData = true;
 			
-			tachTimerStart = tachTimerStop;
-			tachRotationCount = 0;
+			tachTimerStart = tachTimer;
 
 		// if no ticks on rpm sensor for long time set rpm to zero
 		} else {
@@ -403,12 +383,42 @@ inline void formatTachOutput()
 				tachReadoutMicrosec = 0;
 				tachReadoutSendData = true;
 
-				tachRotationCount = 0;
-
 			// reset timer if clock overlapses
 			} else if (microSeconds < 0) {
 				tachTimerStart = 0;
 			}
 		}
+	}
+}
+
+
+// Interrupt to read tach pin change (tach pin 2 - 7)
+ISR(PCINT2_vect)
+{
+	if (tachSupported && tachInterrupt2) {
+		int tachPinStat = digitalRead(tachPin);
+		if (tachPinStat == HIGH) {
+			// record timestamp of change in port input
+			tachInterruptTimer = micros();
+			tachInterruptRotationCount++;
+		}
+		// read tach port and output it to LED
+		digitalWrite(tachLedFeedbackPin, tachPinStat);
+	}
+}
+
+
+// Interrupt to read tach pin change (tach pin 8 - 13)
+ISR(PCINT0_vect)
+{
+	if (tachSupported && tachInterrupt0) {
+		int tachPinStat = digitalRead(tachPin);
+		if (tachPinStat == HIGH) {
+			// record timestamp of change in port input
+			tachInterruptTimer = micros();
+			tachInterruptRotationCount++;
+		}
+		// read tach port and output it to LED
+		digitalWrite(tachLedFeedbackPin, tachPinStat);
 	}
 }
