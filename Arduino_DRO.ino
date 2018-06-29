@@ -1,10 +1,11 @@
 /*
- ArduinoDRO + Tach V5.3
+ ArduinoDRO + Tach V5.4
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
  Update 15 July 2014
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
+ 
  
  Updated 10 August 2014 by Ryszard Malinowski
  http://www.rysium.com 
@@ -22,16 +23,17 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
- Added support for tachometer on axis T with accurate timing
- Added option to send rpm raw data (time and count)
- Correction to retrieving scale sign bit.
- Corrected scale frequency clock.
- Added option to prescale tach reading compensating for more than one tach pulse per rotation.
- Added option to average and round tach output values.
- Added option to select max tach update frequency
  
- NOTE: This program supports hall-sensor to measure rpm.  The tach output format for Android DRO is T<time>/<retation>.
- Android DRO application must support this format for axis T.
+ Version 2.b - Added support for tachometer on axis T with accurate timing
+ Version 3.0 - Added option to send rpm raw data (time and count)
+ Version 5.2 - Correction to retrieving scale sign bit.
+ Version 5.2 - Corrected scale frequency clock.
+ Version 5.2 - Added option to prescale tach reading compensating for more than one tach pulse per rotation.
+ Version 5.3 - Added option to average and round tach output values.
+ Version 5.3 - Added option to select max tach update frequency
+ Version 5.4 - Replace Yuriy's method of clocking scales with method written by Les Jones
+ 
+ NOTE: This program supports pulse sensor to measure rpm.  
  
  Configuration parameters:
 	SCALE_<n>_ENABLED
@@ -81,7 +83,7 @@
 		Possible values:
 			1 = exact measured tach reading is sent
 			any integer number greater than 1 - average tach reading is sent 
-		Default value = 10
+		Default value = 6
 
 	TACH_ROUND
 		Defines if tach reading should be rounded to the nearest 1% of current measured rpm.   
@@ -168,7 +170,7 @@
 #define  TACH_PRESCALE 1
 
 // Number of tach measurments to average 
-#define TACH_AVERAGE_COUNT 10
+#define TACH_AVERAGE_COUNT 6
 
 // This is 1% rounding for tachometer display (set to 0 to disable)
 #define TACH_ROUND 1
@@ -177,7 +179,7 @@
 #define TACH_RAW_DATA_FORMAT 0			// single value format: T<rpm>;
 
 // Tach RPM config
-#define MIN_RPM_DELAY 200				// 1.2 sec calculates to low range = 50 rpm.
+#define MIN_RPM_DELAY 1200				// 1.2 sec calculates to low range = 50 rpm.
 
 #define INPUT_TACH_PIN 7
 
@@ -195,7 +197,8 @@
 
 /* iGaging Clock Settins (do not change) */
 #define SCALE_CLK_PULSES 21				//iGaging and Accuremote sclaes use 21 bit format
-#define SCALLE_CLK_FREQUENCY 9000		//iGaging scales run at about 9-10KHz
+#define SCALE_CLK_FREQUENCY 9000		//iGaging scales run at about 9-10KHz
+#define SCALE_CLK_DUTY 20				// iGaging scales clock run at 20% PWM duty (22us = ON out of 111us cycle)
 
 
 #if (SCALE_X_ENABLED > 0) || (SCALE_Y_ENABLED > 0) || (SCALE_Z_ENABLED > 0) || (SCALE_W_ENABLED > 0)
@@ -375,13 +378,19 @@
 #define LED_OUTPUT_PORT PORTB
 #endif
 
-
+// Some constants calculated here
 unsigned long const minRpmTime = (((long) MIN_RPM_DELAY) * ((long) 1000));
 
 #if TACH_UPDATE_FREQUENCY == UPDATE_FREQUENCY
 int const tachUpdateFrequencyCounterLimit = 0;
 #else
 int const tachUpdateFrequencyCounterLimit = (((long) UPDATE_FREQUENCY) / ((long) TACH_UPDATE_FREQUENCY));
+#endif
+
+int const updateFrequencyCounterLimit = (int) (((unsigned long) SCALE_CLK_FREQUENCY) /((unsigned long) UPDATE_FREQUENCY));
+int const clockCounterLimit = (int) (((unsigned long) 2000000) / (unsigned long) SCALE_CLK_FREQUENCY) - 10;
+#if DRO_ENABLED > 0
+int const scaleClockDutyLimit = (int) (((unsigned long) 20000) * ((unsigned long) SCALE_CLK_DUTY) / (unsigned long) SCALE_CLK_FREQUENCY);
 #endif
 
 //variables that will store tach info and status
@@ -404,13 +413,29 @@ volatile int tachUpdateFrequencyCounter;
 
 //variables that will store the DRO readout
 volatile boolean tickTimerFlag;
-byte bitOffset ;
-byte clockPinHigh;
+volatile byte bitOffset ;
+volatile int updateFrequencyCounter;
 
-volatile long xValue;			//X axis count
-volatile long yValue;			//Y axis count
-volatile long zValue;			//Z axis count
-volatile long wValue;			//W axis count
+// Axis count
+#if SCALE_X_ENABLED > 0
+volatile long xValue;
+volatile long xReportedValue;
+#endif
+#if SCALE_Y_ENABLED > 0
+volatile long yValue;
+volatile long yReportedValue;
+#endif
+#if SCALE_Z_ENABLED > 0
+volatile long zValue;
+volatile long zReportedValue;
+#endif
+#if SCALE_W_ENABLED > 0
+volatile long wValue;
+volatile long wReportedValue;
+#endif
+
+
+
 
 
 //The setup function is called once at startup of the sketch
@@ -418,31 +443,37 @@ void setup()
 {
 	cli();
 	tickTimerFlag = false;
-
-#if DRO_ENABLED > 0
-	// initialize DRO valuse
 	bitOffset = 0;
-	clockPinHigh = 0;
-	xValue = 0L;
-	yValue = 0L;
-	zValue = 0L;
-	wValue = 0L;
+	updateFrequencyCounter = 0;
+
+// Initialize DRO values
+#if DRO_ENABLED > 0
 	
-	//clock pin should be set as output
+	// clock pin should be set as output
 	SCALE_CLK_DDR |= _BV(CLK_PIN_BIT);
+	// set the clock pin to low
+	SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
 
 	//data pins should be set as inputs
 #if SCALE_X_ENABLED > 0
 		X_DDR &= ~_BV(X_PIN_BIT);
+	xValue = 0L;
+	xReportedValue = 0L;
 #endif
 #if SCALE_Y_ENABLED > 0
 		Y_DDR &= ~_BV(Y_PIN_BIT);
+	yValue = 0L;
+	yReportedValue = 0L;
 #endif
 #if SCALE_Z_ENABLED > 0
 		Z_DDR &= ~_BV(Z_PIN_BIT);
+	zValue = 0L;
+	zReportedValue = 0L;
 #endif
 #if SCALE_W_ENABLED > 0
 		W_DDR &= ~_BV(W_PIN_BIT);
+	wValue = 0L;
+	wReportedValue = 0L;
 #endif
 
 #endif
@@ -480,16 +511,11 @@ void setup()
 
 #endif
 
-
 	//initialize serial port
 	Serial.begin(UART_BAUD_RATE);
 
 	//initialize timers
-	startTickTimer(UPDATE_FREQUENCY);			//init and start the "system tick" timer
-
-#if DRO_ENABLED > 0
-	setupClkTimer(SCALLE_CLK_FREQUENCY);			//init the scale clock timer (don't start it yet)
-#endif
+	setupClkTimer();
 
 	sei();	
 
@@ -504,32 +530,26 @@ void loop()
 		tickTimerFlag = false;
 
 #if DRO_ENABLED > 0
-		//reset the reader for the next batch (tachometer should not be cleared here)
-		bitOffset = 0;
 		//print DRO positions to the serial port
 #if SCALE_X_ENABLED > 0
 		Serial.print(F("X"));
-		Serial.print((long)xValue);
+		Serial.print((long)xReportedValue);
 		Serial.print(F(";"));
-		xValue = 0;
 #endif
 #if SCALE_Y_ENABLED > 0
 		Serial.print(F("Y"));
-		Serial.print((long)yValue);
+		Serial.print((long)yReportedValue);
 		Serial.print(F(";"));
-			yValue = 0;
 #endif
 #if SCALE_Z_ENABLED > 0
 		Serial.print(F("Z"));
-		Serial.print((long)zValue);
+		Serial.print((long)zReportedValue);
 		Serial.print(F(";"));
-		zValue = 0;
 #endif
 #if SCALE_W_ENABLED > 0
 		Serial.print(F("W"));
-		Serial.print((long)wValue);
+		Serial.print((long)wReportedValue);
 		Serial.print(F(";"));
-		wValue = 0;
 #endif
 
 #endif
@@ -556,145 +576,144 @@ void loop()
 			}
 		}
 #endif
-
-#if DRO_ENABLED > 0
-		//start reading again
-		startClkTimer();
-#endif
 	}
 }
 
 
-void startTickTimer(int frequency) 
-{
-	//set timer1 interrupt
-	TCCR1A = 0;			// set entire TCCR1A register to 0
-	TCCR1B = 0;			// same for TCCR1B
-	TCNT1  = 0;			//initialize counter value to 0
-
-	// set compare match register
-	OCR1A = F_CPU / (1024 * frequency) - 1;		//must be <65536
-
-	// turn on CTC mode
-	TCCR1B |= (1 << WGM12);
-
-	// Set CS10 and CS12 bits for 1024 prescaler
-	TCCR1B |= (1 << CS12) | (1 << CS10);
-
-	// enable timer compare interrupt
-	TIMSK1 |= (1 << OCIE1A);
-}
-
-
-//initializes the timer for the scale clock but does not start it
-#if DRO_ENABLED > 0
-void setupClkTimer(int frequency)
+//initializes clock timer
+void setupClkTimer()
 {
 	bitOffset = 0;
+	updateFrequencyCounter = 0;
 
 	TCCR2A = 0;			// set entire TCCR2A register to 0
 	TCCR2B = 0;			// same for TCCR2B
 
-	// set compare match register to twice the frequency
-	OCR2A = F_CPU / (16 * frequency) - 1; 	// 160 - 1;
+	// set compare match registers
+#if DRO_ENABLED > 0
+	OCR2A = scaleClockDutyLimit;			// default 44 = 22us
+#else
+	OCR2A = clockCounterLimit - 1;
+#endif
+	OCR2B = clockCounterLimit;			// default 222 = 111us
 
-	// turn on CTC mode
-	TCCR2A |= (1 << WGM21);
+	// turn on Fast PWM mode
+	TCCR2A |= _BV(WGM21) | _BV(WGM20);
 
 	// Set CS21 bit for 8 prescaler //CS20 for no prescaler
-	TCCR2B |= (1 << CS21);
-}
-#endif
+	TCCR2B |= _BV(CS21);
 
-//starts scale clock timer
+	//initialize counter value to start at low pulse
 #if DRO_ENABLED > 0
-void startClkTimer()
-{
-	//initialize counter value to 0
+	TCNT2  = scaleClockDutyLimit + 1;
+#else
 	TCNT2  = 0;
-	// enable timer compare interrupt
-	TIMSK2 |= (1 << OCIE2A);
-}
 #endif
+	// enable timer compare interrupt A and B
+	TIMSK2 |= _BV(OCIE2A) | _BV(OCIE2B);
+	
+}
 
-//stops scale clock timer
-#if DRO_ENABLED > 0
-void stopClkTimer()
-{
-	// disable timer compare interrupt
-	TIMSK2 &= ~(1 << OCIE2A);
-}
-#endif
 
 
 /* Interrupt Service Routines */
 
-//timer 1 compare interrupt service routine (provides system tick)
-ISR(TIMER1_COMPA_vect) 
-{
-	tickTimerFlag = 1;
+// Timer 2 interrupt B ( Switches clock pin from low to high 21 times) at the end of clock counter limit
+ISR(TIMER2_COMPB_vect) {
+
+	// Set counter back to zero  
+	TCNT2  = 0;  
+#if DRO_ENABLED > 0
+	// Only set the clock high if bitOffset less than 21
+	if (bitOffset < SCALE_CLK_PULSES) {
+		// Set clock pin high
+		SCALE_CLK_OUTPUT_PORT |= _BV(CLK_PIN_BIT);
+	}
+#endif
 }
 
-//Timer 2 interrupt (scale clock driver)
-#if DRO_ENABLED > 0
+
+// Timer 2 interrupt A ( Switches clock pin from high to low) at the end of clock PWM Duty counter limit
 ISR(TIMER2_COMPA_vect) 
 {
-	//scale reading happens here
-	if (!clockPinHigh) {
-		SCALE_CLK_OUTPUT_PORT |= _BV(CLK_PIN_BIT);
-		clockPinHigh = 1;
-	} else {
-		SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
-		clockPinHigh = 0;
+#if DRO_ENABLED > 0
+	// Set clock low
+	SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
 
-		//read the pin state and shift it into the appropriate variables
-		if (bitOffset < SCALE_CLK_PULSES - 1) {
+	//read the pin state and shift it into the appropriate variables
+	if (bitOffset < SCALE_CLK_PULSES - 1) {
 #if SCALE_X_ENABLED > 0
-			xValue |= ((long)(X_INPUT_PORT & _BV(X_PIN_BIT) ? 1 : 0) << bitOffset);
+		xValue |= ((long)(X_INPUT_PORT & _BV(X_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
 
 #if SCALE_Y_ENABLED > 0
-			yValue |= ((long)(Y_INPUT_PORT & _BV(Y_PIN_BIT) ? 1 : 0) << bitOffset);
+		yValue |= ((long)(Y_INPUT_PORT & _BV(Y_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
 
 #if SCALE_Z_ENABLED > 0
-			zValue |= ((long)(Z_INPUT_PORT & _BV(Z_PIN_BIT) ? 1 : 0) << bitOffset);
+		zValue |= ((long)(Z_INPUT_PORT & _BV(Z_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
 
 #if SCALE_W_ENABLED > 0
-			wValue |= ((long)(W_INPUT_PORT & _BV(W_PIN_BIT) ? 1 : 0) << bitOffset);
+		wValue |= ((long)(W_INPUT_PORT & _BV(W_PIN_BIT) ? 1 : 0) << bitOffset);
 #endif
 
-			//increment the bit offset
-			bitOffset++;
 
-		} else {
+	} else if (bitOffset == SCALE_CLK_PULSES - 1) {
 
-			//stop the timer after the predefined number of pulses
-			stopClkTimer();
+		//stop the timer after the predefined number of pulses
 #if SCALE_X_ENABLED > 0
-			if (X_INPUT_PORT & _BV(X_PIN_BIT))
-				xValue |= ((long)0xfff << 20);
+		if (X_INPUT_PORT & _BV(X_PIN_BIT))
+			xValue |= ((long)0xfff << 20);
+		xReportedValue = xValue;
+		xValue = 0L;
 #endif
 
 #if SCALE_Y_ENABLED > 0
-			if (Y_INPUT_PORT & _BV(Y_PIN_BIT))
-				yValue |= ((long)0xfff << 20);
+		if (Y_INPUT_PORT & _BV(Y_PIN_BIT))
+			yValue |= ((long)0xfff << 20);
+		yReportedValue = yValue;
+		yValue = 0L;
 #endif
 
 #if SCALE_Z_ENABLED > 0
-			if (Z_INPUT_PORT & _BV(Z_PIN_BIT))
-				zValue |= ((long)0xfff << 20);
+		if (Z_INPUT_PORT & _BV(Z_PIN_BIT))
+			zValue |= ((long)0xfff << 20);
+		zReportedValue = zValue;
+		zValue = 0L;
 #endif
 
 #if SCALE_W_ENABLED > 0
-			if (W_INPUT_PORT & _BV(W_PIN_BIT))
-				wValue |= ((long)0xfff << 20);
+		if (W_INPUT_PORT & _BV(W_PIN_BIT))
+			wValue |= ((long)0xfff << 20);
+		wReportedValue = wValue;
+		wValue = 0L;
 #endif
-		}
+		// Tell the main loop, that it's time to sent data
+		tickTimerFlag = true;
+
 	}
-}
+#else
+	if (bitOffset == 0) {
+		// Tell the main loop, that it's time to sent data
+		tickTimerFlag = true;
+	}
 #endif
+
+	//increment the bit offset
+	if (bitOffset < SCALE_CLK_PULSES) {
+		bitOffset++;
+	}
+	
+	updateFrequencyCounter++;
+
+	// Start of next cycle 
+	if ( updateFrequencyCounter >= updateFrequencyCounterLimit) {
+		bitOffset = 0;
+		updateFrequencyCounter = 0;
+	}
+
+}
 
 
 // Calculate the tach rpm 
