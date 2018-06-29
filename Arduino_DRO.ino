@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.5
+ ArduinoDRO + Tach V5.6
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 17 August 2014 by Ryszard Malinowski
+ Updated 9 September 2014 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -33,6 +33,7 @@
  Version 5.3 - Added option to select max tach update frequency
  Version 5.4 - Replace Yuriy's method of clocking scales with method written by Les Jones
  Version 5.5 - Optimizing the scale reading logic using method written by Les Jones
+ Version 5.6 - Adding 4us delay between scale clock sygnal change and reading first axis data
  
  
  NOTE: This program supports pulse sensor to measure rpm.  
@@ -640,8 +641,12 @@ ISR(TIMER2_COMPA_vect)
 	// Contorl the scale clock for only first 21 loops
 	if (updateFrequencyCounter < SCALE_CLK_PULSES) {
 	
-		// Set clock low
-		SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
+		// Set clock low if high and then delay 2us
+		if (SCALE_CLK_OUTPUT_PORT & _BV(CLK_PIN_BIT)) {
+			SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
+			TCNT2  = scaleClockDutyLimit - 4; 
+			return;
+		}
 
 		// read the pin state and shift it into the appropriate variables
 		// Logic by Les Jones:
