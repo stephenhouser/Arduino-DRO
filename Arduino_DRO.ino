@@ -1,12 +1,12 @@
 /*
- ArduinoDRO + Tach V4
+ ArduinoDRO + Tach V4.1
  
  Reading Grizzly iGaging Digital Scales V2.1 Created 19 January 2012
  Updated 03 April 2013
  by Yuriy Krushelnytskiy
  http://www.yuriystoys.com
  
- Updated 07 July 2014 by Ryszard Malinowski
+ Updated 06 August 2014 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -23,6 +23,8 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
  Added support for tachometer on axis T (input pin 7) handled by interrupt routine
+ Added option to send rpm data instead of row format data
+ 
 
  NOTE: This program supports hall-sensor to measure rpm.  The tach output format for Android DRO is T<time>/<retation>.
  Android DRO application must support this format for axis T.
@@ -47,6 +49,23 @@
 			false = tach sensor functionality is not supported
 		Default value = true
 
+	tachRawDataFormat
+		Defines the format of tach data sent to serial port.
+		Possible values:
+			true = tach data is sent in raw (two values) format: T<total_time>/<number_of_pulses>;
+			false = tach data is sent in single value format: T<rpm>;
+		Default value = false
+
+	minRpmDelay
+		Defines the delay (in milliseconds) in showing 0 when rotation stops.  If rpm is so low and time between tach pulse
+		changes longer than this value, value zero rpm ("T0;") will be sent to the serial port.
+		Note: this number will determine the slowest rpm that can be measured.  In order to measure smaller rpm I suggest 
+		      to use a sensor with more than one "ticks per revolution" (for example hall sensor with two or more magnets).
+		      The number of "ticks per revolution" should be set in tachometer setting in Android app.
+		Possible values:
+			any integer number > 0
+		Default value = 1200 (the minimum rpm measured will be 50 rpm)
+		
 	clockPin
 		Defines the I/O pin where clock signal for all DRO scales is connected
 		Possible values:
@@ -71,16 +90,6 @@
 		Possible values:
 			integer number between 2 and 13
 		Default value = 13 (on-board LED)
-
-	minRpmDelay
-		Defines the delay (in milliseconds) in showing 0 when rotation stops.  If rpm is so low and time between tach pulse
-		changes longer than this value, value zero rpm ("T0;") will be sent to the serial port.
-		Note: this number will determine the slowest rpm that can be measured.  In order to measure smaller rpm I suggest 
-		      to use a sensor with more than one "ticks per revolution" (for example hall sensor with two or more magnets).
-		      The number of "ticks per revolution" should be set in tachometer setting in Android app.
-		Possible values:
-			any integer number > 0
-		Default value = 1200 (the minimum rpm measured will be 50 rpm)
 	
  */
  
@@ -92,6 +101,11 @@ boolean const wAxisSupported = true;
 
 // System config (if Tach is not connected change in the corresponding constant value from "true" to "false")
 boolean const tachSupported = true;
+// Tach data format
+boolean const tachRawDataFormat = false;			// single value format: T<rpm>;
+
+// Tach RPM config
+long const minRpmDelay = 1200;			// 1.2 sec calculates to low range = 50 rpm.
  
 // I/O ports config (change pin numbers if DRO, Tach sensor or Tach LED feedback is connected to different ports)
 int const clockPin = 2;
@@ -104,30 +118,26 @@ int const wDataPin = 6;
 int const tachPin = 7;
 int const tachLedFeedbackPin = 13;
 
-// Tach RPM config
-long const minRpmDelay = 1200;			// 1.2 sec calculates to low range = 50 rpm.
 
 //---END OF CONFIGURATION PARAMETERS ---
 
 
-
-
 boolean const droSupported = (xAxisSupported || yAxisSupported || zAxisSupported || wAxisSupported);
-
 boolean const tachInterrupt2 = (tachPin >= 2 && tachPin <= 7);
 boolean const tachInterrupt0 = (tachPin >= 8 && tachPin <= 13);
+unsigned long const minRpmTime = (minRpmDelay * 1000);
 
-long const minRpmTime = (minRpmDelay * 1000);
 
 //variables that will store tach info and status
-volatile long tachInterruptTimer;
-volatile long tachInterruptRotationCount;
+volatile unsigned long tachInterruptTimer;
+volatile unsigned long tachInterruptRotationCount;
 
-volatile long tachTimerStart;
+volatile unsigned long tachTimerStart;
 
 //variables that will store the readout output
-volatile long tachReadoutRotationCount;
-volatile long tachReadoutMicrosec;
+volatile unsigned long tachReadoutRotationCount;
+volatile unsigned long tachReadoutMicrosec;
+volatile unsigned long tachReadoutRpm;
 volatile boolean tachReadoutSendData;
 
 
@@ -308,9 +318,13 @@ void loop()
 	// output tach data
 		if (tachReadoutSendData) {
 			Serial.print("T");
-			Serial.print((long)tachReadoutMicrosec);
-			Serial.print("/");
-			Serial.print((long)tachReadoutRotationCount);
+			if (tachRawDataFormat) {
+				Serial.print((unsigned long)tachReadoutMicrosec);
+				Serial.print("/");
+				Serial.print((unsigned long)tachReadoutRotationCount);
+			} else {
+				Serial.print((unsigned long)tachReadoutRpm);
+			}
 			Serial.print(";");
 			tachReadoutSendData = false;
 		}
@@ -349,9 +363,10 @@ inline void tickTock()
 inline void formatTachOutput()
 {
 	if (tachSupported) {
-		long microSeconds;
-		long tachRotationCount;
-		long tachTimer;
+		unsigned long microSeconds;
+		unsigned long tachRotationCount;
+		unsigned long tachTimer;
+		unsigned long currentMicros;
 
 
 		// Read data from the last interrupt (stop interupts to read a pair in sync)
@@ -367,25 +382,46 @@ inline void formatTachOutput()
 			return;
 		}
 		
-		// We have at least one tick on rpm sensor so calculate the average time between ticks
+		// We have at least one tick on rpm sensor so calculate the time between ticks
 		if (tachRotationCount != 0) {
 			tachReadoutRotationCount = tachRotationCount;
 			tachReadoutMicrosec = tachTimer - tachTimerStart;
-			tachReadoutSendData = true;
+			// Ignore readout that is too low
+			if (tachReadoutMicrosec <= minRpmTime) {
+				tachReadoutSendData = true;
+			}
 			
 			tachTimerStart = tachTimer;
 
-		// if no ticks on rpm sensor for long time set rpm to zero
+		// if no ticks on rpm sensor...
 		} else {
-			microSeconds = micros() - tachTimerStart;
-			if (microSeconds > minRpmTime ) {
-				tachReadoutRotationCount = 0;
-				tachReadoutMicrosec = 0;
-				tachReadoutSendData = true;
-
+			currentMicros = micros();
 			// reset timer if clock overlapses
-			} else if (microSeconds < 0) {
+			if (currentMicros < tachTimerStart) {
 				tachTimerStart = 0;
+				return;
+			} else {
+			// if no pulses for longer than minRpmTime then set rpm to zero
+				microSeconds = currentMicros - tachTimerStart;
+				if (microSeconds > minRpmTime ) {
+					tachReadoutRotationCount = 0;
+					tachReadoutMicrosec = 0;
+					tachReadoutRpm = 0;
+					tachReadoutSendData = true;
+					return;
+				}
+			}
+		}
+		
+		if (!tachRawDataFormat) {
+			if (tachReadoutSendData) {
+       			unsigned long averageTime = tachReadoutMicrosec/tachReadoutRotationCount;
+				if (averageTime != 0) {
+					tachReadoutRpm = ((unsigned long) 600000000 / averageTime) + 5;
+					tachReadoutRpm = ((unsigned long) tachReadoutRpm / 10);
+				} else {
+					tachReadoutSendData = false;
+				}
 			}
 		}
 	}
@@ -396,14 +432,15 @@ inline void formatTachOutput()
 ISR(PCINT2_vect)
 {
 	if (tachSupported && tachInterrupt2) {
-		int tachPinStat = digitalRead(tachPin);
-		if (tachPinStat == HIGH) {
+		if (digitalRead(tachPin) == HIGH) {
 			// record timestamp of change in port input
 			tachInterruptTimer = micros();
 			tachInterruptRotationCount++;
-		}
+			digitalWrite(tachLedFeedbackPin, HIGH);
+		} else {
 		// read tach port and output it to LED
-		digitalWrite(tachLedFeedbackPin, tachPinStat);
+			digitalWrite(tachLedFeedbackPin, LOW);
+		}
 	}
 }
 
@@ -412,13 +449,14 @@ ISR(PCINT2_vect)
 ISR(PCINT0_vect)
 {
 	if (tachSupported && tachInterrupt0) {
-		int tachPinStat = digitalRead(tachPin);
-		if (tachPinStat == HIGH) {
+		if (digitalRead(tachPin) == HIGH) {
 			// record timestamp of change in port input
 			tachInterruptTimer = micros();
 			tachInterruptRotationCount++;
-		}
+			digitalWrite(tachLedFeedbackPin, HIGH);
+		} else {
 		// read tach port and output it to LED
-		digitalWrite(tachLedFeedbackPin, tachPinStat);
+			digitalWrite(tachLedFeedbackPin, LOW);
+		}
 	}
 }
