@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.11
+ ArduinoDRO + Tach V5.12
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 02 January 2016 by Ryszard Malinowski
+ Updated 04 January 2019 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -39,6 +39,7 @@
  Version 5.9 - Reduce flickering on RPM display.  Remove long delay in RPM displaying Zero after the rotation stops.
  Version 5.10 - Add "smart rounding" on tach display.  Fix 1% tach rounding.  Support processors running at 8MHz clock.
  Version 5.11 - Add "touch probe" support.
+ Version 5.12 - Fix "touch probe" port definition and comments.
  
  
  NOTE: This program supports pulse sensor to measure rpm and switch type touch probe .  
@@ -298,7 +299,7 @@
 #define SCALE_AVERAGE_ENABLED 0
 #endif
 
-// Define registers and pins for ports
+// Define registers and pins for scale ports
 #if SCALE_CLK_PIN < 8 
 #define CLK_PIN_BIT SCALE_CLK_PIN
 #define SCALE_CLK_DDR DDRD
@@ -469,14 +470,15 @@
 #define TACH_LED_OUTPUT_PORT PORTB
 #endif
 
+// Define registers and pins for touch probe
 #if INPUT_PROBE_PIN < 8 
 #define PROBE_PIN_BIT INPUT_PROBE_PIN
 #define PROBE_DDR DDRD
-#define PROBE_INPUT PORTD
+#define PROBE_INPUT_PORT PIND
 #else
 #define PROBE_PIN_BIT (INPUT_PROBE_PIN - 8)
 #define PROBE_DDR DDRB
-#define PROBE_INPUT_PORT PORTB
+#define PROBE_INPUT_PORT PINB
 #endif
 
 #if OUTPUT_PROBE_LED_PIN < 8 
@@ -1205,7 +1207,7 @@ ISR(TACH_INTERRUPT_VECTOR)
 
 
 
-// Interrupt to read tach pin change
+// Read touch probe status
 #if PROBE_ENABLED > 0
 inline unsigned int readProbeOutputData()
 {
