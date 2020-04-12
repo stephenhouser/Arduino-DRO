@@ -1,5 +1,5 @@
 /*
- ArduinoDRO + Tach V5.12
+ ArduinoDRO + Tach V6.0
  
  iGaging/AccuRemote Digital Scales Controller V3.3
  Created 5 July 2014
@@ -7,7 +7,7 @@
  Copyright (C) 2014 Yuriy Krushelnytskiy, http://www.yuriystoys.com
  
  
- Updated 04 January 2019 by Ryszard Malinowski
+ Updated 24 January 2019 by Ryszard Malinowski
  http://www.rysium.com 
 
   This program is free software: you can redistribute it and/or modify
@@ -40,29 +40,42 @@
  Version 5.10 - Add "smart rounding" on tach display.  Fix 1% tach rounding.  Support processors running at 8MHz clock.
  Version 5.11 - Add "touch probe" support.
  Version 5.12 - Fix "touch probe" port definition and comments.
+ Version 6.0 - Add suport for Quadrature Encoder scales through LS7366R-type shield.
  
  
- NOTE: This program supports pulse sensor to measure rpm and switch type touch probe .  
+ NOTE: This program supports pulse sensor to measure rpm and switch type touch probe .  For quadrature encoder scales use LS7366R-based shield.
+ If at least one quadrature scale is used do not conect other devices to SPI dedicated pins as LS7366R uses SPI for communication
+ Read your Arduino board documentation for SPI pins as on some boards they are shared with "normal" I/O pins (on Arduino UNO it is 11, 12 and 13).
  
  Configuration parameters:
 	SCALE_<n>_ENABLED
 		Defines if DRO functionality on axis <n> should be supported.  
 		If supported DRO scale should be connected to I/O pin defined in constant "<n>DataPin" and 
 		DRO data is sent to serial port with corresponding axis prefix (X, Y, Z or W)
-		Clock pin is common for all scales should be connected to I/O pin defined in constant "clockPin" 
+		Clock pin is common for all iGaging scales should be connected to I/O pin defined in constant "clockPin" 
 		Possible values:
-			1 = DRO functionality on axis <n> is supported
 			0 = DRO functionality on axis <n> is not supported
+			1 = DRO functionality on axis <n> is supported
 		Default value = 1
 
+	SCALE_<n>_TYPE
+		Defines the type of scale used on axis <n>.  
+		Two types of scales are supported: iGaging/AccuRemote Digital Scales and  quadrature encoder scales (common glass or magnetic)
+		Note: If at least on scale is type 1 do not connect any other devices to SPI pins as it will interfere with communication with LS7366R.
+		Possible values:
+			0 = iGaging/AccuRemote Digital Scales with 21bit protocol
+			1 = Quadrature Encoder scales through LS7366R-type shield (32-bit quadrature counter with serial interface).
+		Default value = 0
+
 	SCALE_CLK_PIN
-		Defines the I/O pin where clock signal for all DRO scales is connected
+		Defines the I/O pin where clock signal for all iGaging DRO scales is connected.  Used only if at least one scale is type 0.
 		Possible values:
 			integer number between 2 and 13
 		Default value = 2
 
 	SCALE_<n>_PIN
 		Defines the I/O pin where DRO data signal for selected scale is connected
+		Note: For quadrature scale this pin is connected to SPI SS pin in corresponding LS7366R.
 		Possible values:
 			integer number between 2 and 13
 		Default values = 3, 4, 5, 6 (for corresponding axis X, Y, Z and W)
@@ -88,12 +101,18 @@
 
 	TACH_ENABLED
 		Defines if tach sensor functionality should be supported.  
-		If supported tach sensor should be connected to I/O pin defined in constant "tachPin" and 
+		If supported tach sensor should be connected to I/O pin defined in constant INPUT_TACH_PIN and 
 		rpm value is sent to serial port with axis prefix "T" 
 		Possible values:
-			1 = tach sensor functionality is supported
 			0 = tach sensor functionality is not supported
+			1 = tach sensor functionality is supported
 		Default value = 1
+
+	INPUT_TACH_PIN
+		Defines the I/O pin where tach sensor signal is connected
+		Possible values:
+			integer number between 2 and 13
+		Default value = 7
 
 	TACH_PRESCALE
 		Defines how many tach pulses per one revolution the sensor sends.  
@@ -132,8 +151,8 @@
 		Defines the format of tach data sent to serial port.
 		Note: when raw data format is used, then TACH_PRESCALE, TACH_AVERAGE_COUNT and TACH_ROUND are ignored 
 		Possible values:
-			1 = tach data is sent in raw (two values) format: T<total_time>/<number_of_pulses>;
 			0 = tach data is sent in single value format: T<rpm>;
+			1 = tach data is sent in raw (two values) format: T<total_time>/<number_of_pulses>;
 		Default value = 0
 
 	MIN_RPM_DELAY
@@ -146,18 +165,56 @@
 			any integer number greater than 0
 		Default value = 1200 (the minimum rpm measured will be 50 rpm)
 
-	INPUT_TACH_PIN
-		Defines the I/O pin where tach sensor signal is connected
+	OUTPUT_TACH_LED_ENABLED
+		Defines if the tach LED feedback is supported.  
+		If supported the tach feedback LED should be connected to I/O pin defined in constant OUTPUT_TACH_LED_PIN below 
 		Possible values:
-			integer number between 2 and 13
-		Default value = 7
+			0 = tach LED feedback functionality is not supported
+			1 = tach LED feedback functionality is supported
+		Default value = 1
 
 	OUTPUT_TACH_LED_PIN
 		Defines the I/O pin where the tach LED feedback is connected.  
-		Tach LED feedback indicates the status of tachPin for debugging purposes
+		Tach LED feedback indicates the status of INPUT_TACH_PIN for debugging purposes
 		Possible values:
 			integer number between 2 and 13
-		Default value = 13 (on-board LED)
+		Default value = 9
+
+	PROBE_ENABLED
+		Defines if touch probe sensor functionality should be supported.  
+		If supported touch probe should be connected to I/O pin defined in constant INPUT_PROBE_PIN.   
+		Possible values:
+			1 = touch probe functionality is supported
+			0 = touch probe functionality is not supported
+		Default value = 1
+
+	INPUT_PROBE_PIN
+		Defines the I/O pin where touch probe signal is connected
+		Possible values:
+			integer number between 2 and 13
+		Default value = 8
+
+	PROBE_INVERT
+		Defines if the touch probe input pin signal needs to be inverted (enter the signal level when touch probe is not touching).
+		Possible values:
+			0 = touch probe input pin signal is LOW (logical Zero) when touch probe is in "normal open" status (not touching)
+			1 = touch probe input pin signal is HIGH (logical One) when touch probe is in "normal open" status (not touching)
+		Default value = 0
+
+	OUTPUT_PROBE_LED_ENABLED
+		Defines if the touch probe LED feedback is supported.  
+		If supported the touch probe feedback LED should be connected to I/O pin defined in constant INPUT_PROBE_PIN below 
+		Possible values:
+			1 = touch probe LED feedback functionality is supported
+			0 = touch probe LED feedback functionality is not supported
+		Default value = 1
+
+	OUTPUT_PROBE_LED_PIN
+		Defines the I/O pin where the touch probe LED feedback is connected.  
+		Touch probe LED feedback indicates the status of INPUT_PROBE_PIN for debugging purposes
+		Possible values:
+			integer number between 2 and 13
+		Default value = 10
 
 	UART_BAUD_RATE
 		Defines the serial port baud rate.  Make sure it matches the Bluetooth module's baud rate.
@@ -178,35 +235,6 @@
 		Possible values:
 			any integer number between 1 and UPDATE_FREQUENCY 
 		Default value = 4
-	
-	PROBE_ENABLED
-		Defines if touch probe sensor functionality should be supported.  
-		If supported touch probe should be connected to I/O pin defined in constant "probePin".   
-		Possible values:
-			1 = touch probe functionality is supported
-			0 = touch probe functionality is not supported
-		Default value = 1
-
-	INPUT_PROBE_PIN
-		Defines the I/O pin where touch probe signal is connected
-		Possible values:
-			integer number between 2 and 13
-		Default value = 8
-
-	PROBE_INVERT
-		Defines if the touch probe input pin signal needs to be inverted (enter the signal level when touch probe is not touching).
-		Possible values:
-			0 = touch probe input pin signal is LOW (logical Zero) when touch probe is in "normal open" status (not touching)
-			1 = touch probe input pin signal is HIGH (logical One) when touch probe is in "normal open" status (not touching)
-		Default value = 0
-
-	OUTPUT_PROBE_LED_PIN
-		Defines the I/O pin where the touch probe LED feedback is connected.  
-		Touch probe LED feedback indicates the status of Touch probe for debugging purposes
-		Possible values:
-			integer number between 2 and 13
-		Default value = 12
-
 
  */
  
@@ -216,6 +244,12 @@
 #define SCALE_Y_ENABLED 1
 #define SCALE_Z_ENABLED 1
 #define SCALE_W_ENABLED 1
+
+// DRO config (if axis is connected to Quadrature Encoder scales through LS7366R-type shield change in the corresponding constant value from "0" to "1")
+#define SCALE_X_TYPE 0
+#define SCALE_Y_TYPE 0
+#define SCALE_Z_TYPE 0
+#define SCALE_W_TYPE 0
 
 // I/O ports config (change pin numbers if DRO, Tach sensor or Tach LED feedback is connected to different ports)
 #define SCALE_CLK_PIN 2
@@ -234,8 +268,9 @@
 // DRO rounding sample size.  Change it to 16 for machines with power feed
 #define AXIS_AVERAGE_COUNT 24
 
-// System config (if Tach is not connected change in the corresponding constant value from "1" to "0")
+// Tach config (if Tach is not connected change in the corresponding constant value from "1" to "0")
 #define TACH_ENABLED 1
+#define INPUT_TACH_PIN 7
 
 // Tach pre-scale value (number of tach sensor pulses per revolution)
 #define  TACH_PRESCALE 1
@@ -252,19 +287,21 @@
 // Tach RPM config
 #define MIN_RPM_DELAY 1200				// 1.2 sec calculates to low range = 50 rpm.
 
-#define INPUT_TACH_PIN 7
+// Tach LED feadback config
+#define OUTPUT_TACH_LED_ENABLED 1
+#define OUTPUT_TACH_LED_PIN 9
 
-#define OUTPUT_TACH_LED_PIN 13
 
-
-// Touch probe setup (if Touch Probe is not connected change in the corresponding constant value from "1" to "0")
+// Touch probe config (if Touch Probe is not connected change in the corresponding constant value from "1" to "0")
 #define PROBE_ENABLED 1
-
 #define INPUT_PROBE_PIN 8				// Pin 8 connected to Touch Probe
 
+// Touch probe invert signal config
 #define PROBE_INVERT 0					// Touch Probe signal inversion: Open = Input pin is Low; Closed = Input pin is High
 
-#define OUTPUT_PROBE_LED_PIN 12			// When Tach is not enabled you may change it to 13 in order to use on-board LED.
+// Touch probe LED feadback config
+#define OUTPUT_PROBE_LED_ENABLED 1
+#define OUTPUT_PROBE_LED_PIN 10			// When Quadrature Encoder scale are not used, on Arduino Uno you may change it to on-board LED pin 13.
 
 
 // General Settings
@@ -278,8 +315,8 @@
 //---DO NOT CHANGE THE CODE BELOW UNLESS YOU KNOW WHAT YOU ARE DOING ---
 
 /* iGaging Clock Settings (do not change) */
-#define SCALE_CLK_PULSES 21				//iGaging and Accuremote scales use 21 bit format
-#define SCALE_CLK_FREQUENCY 9000		//iGaging scales run at about 9-10KHz
+#define SCALE_CLK_PULSES 21				// iGaging and Accuremote scales use 21 bit format
+#define SCALE_CLK_FREQUENCY 9000		// iGaging scales run at about 9-10KHz
 #define SCALE_CLK_DUTY 20				// iGaging scales clock run at 20% PWM duty (22us = ON out of 111us cycle)
 
 /* weighted average constants */ 
@@ -292,6 +329,19 @@
 #else
 #define DRO_ENABLED 0
 #endif
+
+#if (SCALE_X_ENABLED > 0 && SCALE_X_TYPE == 0) || (SCALE_Y_ENABLED > 0 && SCALE_Y_TYPE == 0) || (SCALE_Z_ENABLED > 0 && SCALE_Z_TYPE == 0) || (SCALE_W_ENABLED > 0 && SCALE_W_TYPE == 0)
+#define DRO_TYPE0_ENABLED 1
+#else
+#define DRO_TYPE0_ENABLED 0
+#endif
+
+#if (SCALE_X_ENABLED > 0 && SCALE_X_TYPE == 1) || (SCALE_Y_ENABLED > 0 && SCALE_Y_TYPE == 1) || (SCALE_Z_ENABLED > 0 && SCALE_Z_TYPE == 1) || (SCALE_W_ENABLED > 0 && SCALE_W_TYPE == 1)
+#define DRO_TYPE1_ENABLED 1
+#else
+#define DRO_TYPE1_ENABLED 0
+#endif
+
 
 #if (SCALE_X_AVERAGE_ENABLED > 0) || (SCALE_Y_AVERAGE_ENABLED > 0) || (SCALE_Z_AVERAGE_ENABLED > 0) || (SCALE_W_AVERAGE_ENABLED > 0)
 #define SCALE_AVERAGE_ENABLED 1
@@ -314,40 +364,48 @@
 #define X_PIN_BIT SCALE_X_PIN
 #define X_DDR DDRD
 #define X_INPUT_PORT PIND
+#define X_OUTPUT_PORT PORTD
 #else
 #define X_PIN_BIT (SCALE_X_PIN - 8)
 #define X_DDR DDRB
 #define X_INPUT_PORT PINB
+#define X_OUTPUT_PORT PORTB
 #endif
 
 #if SCALE_Y_PIN < 8 
 #define Y_PIN_BIT SCALE_Y_PIN
 #define Y_DDR DDRD
 #define Y_INPUT_PORT PIND
+#define Y_OUTPUT_PORT PORTD
 #else
 #define Y_PIN_BIT (SCALE_Y_PIN - 8)
 #define Y_DDR DDRB
 #define Y_INPUT_PORT PINB
+#define Y_OUTPUT_PORT PORTB
 #endif
 
 #if SCALE_Z_PIN < 8 
 #define Z_PIN_BIT SCALE_Z_PIN
 #define Z_DDR DDRD
 #define Z_INPUT_PORT PIND
+#define Z_OUTPUT_PORT PORTD
 #else
 #define Z_PIN_BIT (SCALE_Z_PIN - 8)
 #define Z_DDR DDRB
 #define Z_INPUT_PORT PINB
+#define Z_OUTPUT_PORT PORTB
 #endif
 
 #if SCALE_W_PIN < 8 
 #define W_PIN_BIT SCALE_W_PIN
 #define W_DDR DDRD
 #define W_INPUT_PORT PIND
+#define W_OUTPUT_PORT PORTD
 #else
 #define W_PIN_BIT (SCALE_W_PIN - 8)
 #define W_DDR DDRB
 #define W_INPUT_PORT PINB
+#define W_OUTPUT_PORT PORTB
 #endif
 
 // Define tach interrupt for selected pin
@@ -492,7 +550,9 @@
 #endif
 
 
-
+#if DRO_TYPE1_ENABLED
+#include <SPI.h>
+#endif
 // Some constants calculated here
 unsigned long const minRpmTime = (((long) MIN_RPM_DELAY) * ((long) 1000));
 long const longMax = __LONG_MAX__;
@@ -578,11 +638,17 @@ volatile int axisLastReadPositionW;
 volatile long axisAMAValueW;
 #endif
 
+#if DRO_TYPE1_ENABLED > 0
+volatile unsigned int encoderValue1;
+volatile unsigned int encoderValue2;
+volatile unsigned int encoderValue3;
+volatile unsigned int encoderValue4;
+#endif
 
 
 //The setup function is called once at startup of the sketch
-void setup()
-{
+void setup() {
+	
 	cli();
 	sendTachData = false;
 	tickTimerFlag = false;
@@ -590,45 +656,100 @@ void setup()
 
 // Initialize DRO values
 #if DRO_ENABLED > 0
-	
+	// use clock only for scale type 0
+#if DRO_TYPE0_ENABLED	
 	// clock pin should be set as output
 	SCALE_CLK_DDR |= _BV(CLK_PIN_BIT);
 	// set the clock pin to low
 	SCALE_CLK_OUTPUT_PORT &= ~_BV(CLK_PIN_BIT);
+#endif
 
-	//data pins should be set as inputs
+	//data pins should be set as input for scale type 0 and as output for scale type 1
 #if SCALE_X_ENABLED > 0
-		X_DDR &= ~_BV(X_PIN_BIT);
+#if SCALE_X_TYPE == 0
+	X_DDR &= ~_BV(X_PIN_BIT);
+#elif SCALE_X_TYPE == 1
+	X_DDR |= _BV(X_PIN_BIT);
+#endif
 	xValue = 0L;
 	xReportedValue = 0L;
 #if SCALE_X_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadX, axisLastReadPositionX, axisAMAValueX);
 #endif
 #endif
+
 #if SCALE_Y_ENABLED > 0
+#if SCALE_Y_TYPE == 0
 	Y_DDR &= ~_BV(Y_PIN_BIT);
+#elif SCALE_Y_TYPE == 1
+	Y_DDR |= _BV(Y_PIN_BIT);
+#endif
 	yValue = 0L;
 	yReportedValue = 0L;
 #if SCALE_Y_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadY, axisLastReadPositionY, axisAMAValueY);
 #endif
 #endif
+
 #if SCALE_Z_ENABLED > 0
-		Z_DDR &= ~_BV(Z_PIN_BIT);
+#if SCALE_Z_TYPE == 0
+	Z_DDR &= ~_BV(Z_PIN_BIT);
+#elif SCALE_Z_TYPE == 1
+	Z_DDR |= _BV(Z_PIN_BIT);
+#endif
 	zValue = 0L;
 	zReportedValue = 0L;
 #if SCALE_Z_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadZ, axisLastReadPositionZ, axisAMAValueZ);
 #endif
 #endif
+
 #if SCALE_W_ENABLED > 0
+#if SCALE_W_TYPE == 0
 	W_DDR &= ~_BV(W_PIN_BIT);
+#elif SCALE_W_TYPE == 1
+	W_DDR |= _BV(W_PIN_BIT);
+#endif
 	wValue = 0L;
 	wReportedValue = 0L;
 #if SCALE_W_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadW, axisLastReadPositionW, axisAMAValueW);
 #endif
 #endif
+
+// Initialize SPI and LS7366R registers for DRO type 1	
+#if DRO_TYPE1_ENABLED	
+	// SPI initialization
+	SPI.begin();
+
+#if SCALE_X_ENABLED > 0 && SCALE_X_TYPE == 1
+	X_OUTPUT_PORT &= ~_BV(X_PIN_BIT);
+	SPI.transfer(0x88); 
+	SPI.transfer(0x03);
+	X_OUTPUT_PORT |= _BV(X_PIN_BIT);
+#endif
+
+#if SCALE_Y_ENABLED > 0 && SCALE_Y_TYPE == 1
+	Y_OUTPUT_PORT &= ~_BV(Y_PIN_BIT);
+	SPI.transfer(0x88); 
+	SPI.transfer(0x03);
+	Y_OUTPUT_PORT |= _BV(Y_PIN_BIT);
+#endif
+
+#if SCALE_Z_ENABLED > 0 && SCALE_Z_TYPE == 1
+	Z_OUTPUT_PORT &= ~_BV(Z_PIN_BIT);
+	SPI.transfer(0x88); 
+	SPI.transfer(0x03);
+	Z_OUTPUT_PORT |= _BV(Z_PIN_BIT);
+#endif
+
+#if SCALE_W_ENABLED > 0 && SCALE_W_TYPE == 1
+	W_OUTPUT_PORT &= ~_BV(W_PIN_BIT);
+	SPI.transfer(0x88); 
+	SPI.transfer(0x03);
+	W_OUTPUT_PORT |= _BV(W_PIN_BIT);
+#endif
+#endif;
 
 #endif
 
@@ -637,9 +758,11 @@ void setup()
 	// Setup tach port for input
 	TACH_DDR &= ~_BV(TACH_PIN_BIT);
 	
+#if OUTPUT_TACH_LED_ENABLED > 0	
 	TACH_LED_DDR |= _BV(TACH_LED_PIN_BIT);
 	// Set LED pin to LOW
 	TACH_LED_OUTPUT_PORT &= ~_BV(TACH_LED_PIN_BIT);
+#endif
 	
 	// Setup interrupt on tach pin
 	PCICR |= _BV(TACH_INTERRUPT_REGISTER);
@@ -669,9 +792,11 @@ void setup()
 #if PROBE_ENABLED > 0
 	// Setup tach port for input
 	PROBE_DDR &= ~_BV(PROBE_PIN_BIT);
+#if OUTPUT_PROBE_LED_ENABLED > 0
 	PROBE_LED_DDR |= _BV(PROBE_LED_PIN_BIT);
 	// Set LED pin to LOW
 	PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
+#endif
 	// Set probe input to "not touching"
 	probeReportedValue = 0;
 
@@ -696,6 +821,9 @@ void loop()
 		tickTimerFlag = false;
 
 #if DRO_ENABLED > 0
+#if DRO_TYPE1_ENABLED
+		readEncoders();
+#endif
 		//print DRO positions to the serial port
 #if SCALE_X_ENABLED > 0
 #if SCALE_X_AVERAGE_ENABLED > 0
@@ -787,7 +915,7 @@ void setupClkTimer()
 	TCCR2B = 0;			// same for TCCR2B
 
 	// set compare match registers
-#if DRO_ENABLED > 0
+#if DRO_TYPE0_ENABLED > 0
 	OCR2A = scaleClockDutyLimit;			// default 44 = 22us
 #else
 	OCR2A = clockCounterLimit - 1;
@@ -801,7 +929,7 @@ void setupClkTimer()
 	TCCR2B |= _BV(CS21);
 
 	//initialize counter value to start at low pulse
-#if DRO_ENABLED > 0
+#if DRO_TYPE0_ENABLED > 0
 	TCNT2  = scaleClockDutyLimit + 1;
 #else
 	TCNT2  = 0;
@@ -820,7 +948,7 @@ ISR(TIMER2_COMPB_vect) {
 
 	// Set counter back to zero  
 	TCNT2  = 0;  
-#if DRO_ENABLED > 0
+#if DRO_TYPE0_ENABLED > 0
 	// Only set the clock high if updateFrequencyCounter less than 21
 	if (updateFrequencyCounter < SCALE_CLK_PULSES) {
 		// Set clock pin high
@@ -833,8 +961,7 @@ ISR(TIMER2_COMPB_vect) {
 // Timer 2 interrupt A ( Switches clock pin from high to low) at the end of clock PWM Duty counter limit
 ISR(TIMER2_COMPA_vect) 
 {
-#if DRO_ENABLED > 0
-
+#if DRO_TYPE0_ENABLED > 0
 	// Control the scale clock for only first 21 loops
 	if (updateFrequencyCounter < SCALE_CLK_PULSES) {
 	
@@ -850,25 +977,25 @@ ISR(TIMER2_COMPA_vect)
 		//	If data pin is HIGH set bit 20th of the axis value to '1'.  Then shift axis value one bit to the right
 		//  This is called 20 times (for bits received from 0 to 19)
 		if (updateFrequencyCounter < SCALE_CLK_PULSES - 1) {
-#if SCALE_X_ENABLED > 0
+#if SCALE_X_ENABLED > 0 && SCALE_X_TYPE == 0
 			if (X_INPUT_PORT & _BV(X_PIN_BIT))
 				xValue |= ((long)0x00100000 );
 			xValue >>= 1;
 #endif
 
-#if SCALE_Y_ENABLED > 0
+#if SCALE_Y_ENABLED > 0 && SCALE_Y_TYPE == 0
 			if (Y_INPUT_PORT & _BV(Y_PIN_BIT))
 				yValue |= ((long)0x00100000 );
 			yValue >>= 1;
 #endif
 
-#if SCALE_Z_ENABLED > 0
+#if SCALE_Z_ENABLED > 0 && SCALE_Z_TYPE == 0
 			if (Z_INPUT_PORT & _BV(Z_PIN_BIT))
 				zValue |= ((long)0x00100000 );
 			zValue >>= 1;
 #endif
 
-#if SCALE_W_ENABLED > 0
+#if SCALE_W_ENABLED > 0 && SCALE_W_TYPE == 0
 			if (W_INPUT_PORT & _BV(W_PIN_BIT))
 				wValue |= ((long)0x00100000 );
 			wValue >>= 1;
@@ -878,28 +1005,28 @@ ISR(TIMER2_COMPA_vect)
 		} else if (updateFrequencyCounter == SCALE_CLK_PULSES - 1) {
 
 			//If 21-st bit is 'HIGH' inverse the sign of the axis readout
-#if SCALE_X_ENABLED > 0
+#if SCALE_X_ENABLED > 0 && SCALE_X_TYPE == 0
 			if (X_INPUT_PORT & _BV(X_PIN_BIT))
 				xValue |= ((long)0xfff00000);
 			xReportedValue = xValue;
 			xValue = 0L;
 #endif
 
-#if SCALE_Y_ENABLED > 0
+#if SCALE_Y_ENABLED > 0 && SCALE_Y_TYPE == 0
 			if (Y_INPUT_PORT & _BV(Y_PIN_BIT))
 				yValue |= ((long)0xfff00000);
 			yReportedValue = yValue;
 			yValue = 0L;
 #endif
 
-#if SCALE_Z_ENABLED > 0
+#if SCALE_Z_ENABLED > 0 && SCALE_Z_TYPE == 0
 			if (Z_INPUT_PORT & _BV(Z_PIN_BIT))
 				zValue |= ((long)0xfff00000);
 			zReportedValue = zValue;
 			zValue = 0L;
 #endif
 
-#if SCALE_W_ENABLED > 0
+#if SCALE_W_ENABLED > 0 && SCALE_W_TYPE == 0
 			if (W_INPUT_PORT & _BV(W_PIN_BIT))
 				wValue |= ((long)0xfff00000);
 			wReportedValue = wValue;
@@ -924,6 +1051,49 @@ ISR(TIMER2_COMPA_vect)
 	}
 
 }
+
+
+#if DRO_TYPE1_ENABLED
+inline void readEncoders() {
+
+#if SCALE_X_ENABLED > 0 && SCALE_X_TYPE == 1
+	X_OUTPUT_PORT &= ~_BV(X_PIN_BIT);
+	readEncoderValue();
+	X_OUTPUT_PORT |= _BV(X_PIN_BIT);
+    xReportedValue= ((long)encoderValue1<<24) + ((long)encoderValue2<<16) + ((long)encoderValue3<<8) + (long)encoderValue4;
+#endif
+
+#if SCALE_Y_ENABLED > 0 && SCALE_Y_TYPE == 1
+	Y_OUTPUT_PORT &= ~_BV(Y_PIN_BIT);
+	readEncoderValue();
+	Y_OUTPUT_PORT |= _BV(Y_PIN_BIT);
+    yReportedValue= ((long)encoderValue1<<24) + ((long)encoderValue2<<16) + ((long)encoderValue3<<8) + (long)encoderValue4;
+#endif
+
+#if SCALE_Z_ENABLED > 0 && SCALE_Z_TYPE == 1
+	Z_OUTPUT_PORT &= ~_BV(Z_PIN_BIT);
+	readEncoderValue();
+	Z_OUTPUT_PORT |= _BV(Z_PIN_BIT);
+    zReportedValue= ((long)encoderValue1<<24) + ((long)encoderValue2<<16) + ((long)encoderValue3<<8) + (long)encoderValue4;
+#endif
+
+#if SCALE_W_ENABLED > 0 && SCALE_W_TYPE == 1
+	W_OUTPUT_PORT &= ~_BV(W_PIN_BIT);
+	readEncoderValue();
+	W_OUTPUT_PORT |= _BV(W_PIN_BIT);
+    wReportedValue= ((long)encoderValue1<<24) + ((long)encoderValue2<<16) + ((long)encoderValue3<<8) + (long)encoderValue4;
+#endif
+}
+
+inline void readEncoderValue() {
+	SPI.transfer(0x60); // Request count
+	encoderValue1 = SPI.transfer(0x00); // Read highest order byte
+	encoderValue2 = SPI.transfer(0x00);
+	encoderValue3 = SPI.transfer(0x00);
+	encoderValue4 = SPI.transfer(0x00); // Read lowest order byte
+}
+
+#endif
 
 
 #if DRO_ENABLED > 0
@@ -1196,10 +1366,13 @@ ISR(TACH_INTERRUPT_VECTOR)
 		// record timestamp of change in port input
 		tachInterruptTimer = micros();
 		tachInterruptRotationCount++;
+#if OUTPUT_TACH_LED_ENABLED > 0	
 	    TACH_LED_OUTPUT_PORT |= _BV(TACH_LED_PIN_BIT);
+#endif
 	} else {
-	// read tach port and output it to LED
+#if OUTPUT_TACH_LED_ENABLED > 0	
 		TACH_LED_OUTPUT_PORT &= ~_BV(TACH_LED_PIN_BIT);
+#endif
 	}
 }
 #endif
@@ -1214,18 +1387,26 @@ inline unsigned int readProbeOutputData()
 	if (PROBE_INPUT_PORT & _BV(PROBE_PIN_BIT)) {
 	// Return probe signal 
 #if PROBE_INVERT == 0
+#if OUTPUT_PROBE_LED_ENABLED > 0
 		PROBE_LED_OUTPUT_PORT |= _BV(PROBE_LED_PIN_BIT);
+#endif
 		return 1;
 #else
+#if OUTPUT_PROBE_LED_ENABLED > 0
 		PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
+#endif
 		return 0;
 #endif
 	} else {
 #if PROBE_INVERT == 0
+#if OUTPUT_PROBE_LED_ENABLED > 0
 		PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
+#endif
 		return  0;
 #else
+#if OUTPUT_PROBE_LED_ENABLED > 0
 		PROBE_LED_OUTPUT_PORT |= _BV(PROBE_LED_PIN_BIT);
+#endif
 		return 1;
 #endif
 	}
