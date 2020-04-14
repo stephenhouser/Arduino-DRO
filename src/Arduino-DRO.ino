@@ -238,6 +238,11 @@
 
  */
 #include "LedControl.h"
+/*
+ * pin 12 is connected to the DataIn 
+ * pin 11 is connected to the CLK 
+ * pin 10 is connected to LOAD 
+ */
 LedControl seven_seg = LedControl(12, 11, 10, 3);
 
 // DRO config (if axis is not connected change in the corresponding constant value from "1" to "0")
@@ -816,6 +821,10 @@ void setup() {
 		seven_seg.setIntensity(i, 8);
 		seven_seg.clearDisplay(i);
 	}
+
+	pinMode(A0, INPUT);
+	pinMode(A1, INPUT);
+	pinMode(A7, INPUT);
 }
 
 
@@ -858,47 +867,115 @@ inline unsigned int readProbeOutputData()
 #define DISPLAY_WIDTH		9	/* one extra to account for the decimal point */
 #define DISPLAY_PRECISION	4
 
-void showString(char str[], int displayAddress) {
-	for (int i = 0; i < DISPLAY_WIDTH; i++) {
-		seven_seg.setChar(displayAddress, i, str[i], false);
+/* formatDouble(value, width, precision) - format a number to fit on a display.
+ *
+ * formats the 'value' to fit in a character string of given 'width' with 
+ * 'precision' numbers after the decimal point. 
+ * 
+ * Stores in a reverse format suitable for writing directly to seven segment display(s)
+ * Requires 'width + 1' character buffer (for the trailing \0)
+ * Inserts a leading zero when -1.0 < value < -1.0.
+ * Sets 'high bit' for characters that should have the decimal point illuminated
+ *
+ * (2.33, 8, 3) => "____2.330"
+ * (-0.001, 8, 3) => "___-0.001"
+ * (-123.1, 8, 4) => "-123.1000"
+ * (0.02, 8, 4) => "___0.0200"
+ */
+int formatDouble(double value, int width, int precision, char *buffer) {
+	if (precision > width) {
+		Serial.print("precision > width\n");
+		return 0;
 	}
+
+	// scale to a long integer and round off at precision.
+	long scaled = (long)round(value * pow(10.0, precision));
+
+	// check for overflow if a positive number
+	if (scaled > 0 && scaled >= pow(10.0, width)) {
+		Serial.print("overflow\n");
+		return 0;
+	}
+
+	// save sign as a char (for later use) and get absolute value
+	int sign = (value < 0) ? '-' : ' ';
+	scaled = labs(scaled);
+
+	// check for underflow if a negative number
+	// Note we have one less digit for negative numbers, as we have a sign (-)
+	if (sign == '-' && scaled >= pow(10.0, width - 1)) {
+		Serial.print("underflow\n");
+		return 0;
+	}
+
+	for (int i = 0; i < width; i++) {
+		if (!scaled && i > precision) {
+								// pad the string with spaces
+			buffer[i] = sign;	// first time we append the sign character
+			sign = ' ';			// every other time we will append space
+		} else {
+			buffer[i] = '0' + (scaled % 10);
+			buffer[i] |= (char)((i == precision) ? 0x80 : 0x00);
+			scaled /= 10;
+		}
+	}
+
+	return 1;
 }
 
 void showValue(long value, int displayAddress) {
-	char printBuffer[10];
+	char buffer[10];
 	double scaledValue = value / SCALE_INCH;
-
-	if (scaledValue >= pow(10, (DISPLAY_WIDTH - DISPLAY_PRECISION - 1))) {
-		// overflow
-		showString("--------", displayAddress);
-		return;
-	}
-
-	if (scaledValue < -pow(10, (DISPLAY_WIDTH - DISPLAY_PRECISION - 2))) {
-		// overflow
-		showString("________", displayAddress);
-		return;
-	}
-
-	dtostrf(scaledValue, DISPLAY_WIDTH, DISPLAY_PRECISION, printBuffer);
-
-	int digit = DISPLAY_WIDTH - 1;
-	for (int i = 0; i < DISPLAY_WIDTH; i++) {
-		if (printBuffer[i] != '.') {
-			seven_seg.setChar(displayAddress, --digit, printBuffer[i], (digit == DISPLAY_PRECISION + 1));
+	if (formatDouble(scaledValue, DISPLAY_WIDTH, DISPLAY_PRECISION, buffer)) {
+		for (int i = 0; i < DISPLAY_WIDTH; i++) {
+			seven_seg.setChar(displayAddress, i, (buffer[i] & 0x7f), (buffer[i] & 0x80));
 		}
 	}
 }
 
-//[3440.2344]
-//[-7131.6406]
-//[ -7.1320]
+bool absMode = true;
+
+#if SCALE_X_ENABLED > 0
+long x0 = 0;
+#endif
+#if SCALE_Y_ENABLED > 0
+long y0 = 0;
+#endif
+#if SCALE_Z_ENABLED > 0
+long z0 = 0;
+#endif
+#if SCALE_W_ENABLED > 0
+long w0 = 0;
+#endif
+
+unsigned long time = 0;           // the last time the output pin was toggled
+unsigned long debounce = 200UL;   // the debounce time, increase if the output flickers
+int previous = false;
+
+void checkSwitches() {
+	int reading = digitalRead(A1);
+	if (reading == HIGH && previous == LOW && millis() - time > debounce) {
+		absMode = !absMode;
+    	time = millis();
+  	}
+	previous = reading;
+
+	if (!digitalRead(A0)) {
+		x0 = xReportedValue;
+	}
+
+	if (!digitalRead(A1)) {
+		y0 = yReportedValue;
+	}
+}
 
 // The loop function is called in an endless loop
 void loop()
 {
 	if (tickTimerFlag) {
 		tickTimerFlag = false;
+
+		checkSwitches();
 
 #if DRO_ENABLED > 0
 #if DRO_TYPE1_ENABLED
@@ -912,7 +989,7 @@ void loop()
 		Serial.print(F("X"));
 		Serial.print((long)xReportedValue);
 		Serial.print(F(";"));
-		showValue(xReportedValue, 0);
+		showValue(xReportedValue - (absMode ? 0 : x0), 0);
 #endif
 
 #if SCALE_Y_ENABLED > 0
@@ -922,7 +999,7 @@ void loop()
 		Serial.print(F("Y"));
 		Serial.print((long)yReportedValue);
 		Serial.print(F(";"));
-		showValue(yReportedValue, 1);
+		showValue(yReportedValue - (absMode ? 0 : y0), 1);
 #endif
 
 #if SCALE_Z_ENABLED > 0

@@ -1,7 +1,7 @@
 # Arduino_DRO
 Firmware for Arduino DRO with 4 Axis, Tachometer, Touch Probe (http://www.rysium.com/rysium.docs/)
 
-This repository is a mirror of the latest code from [Rysiu M](http://www.rysium.com/rysium.docs/) for connecting cheap digital scales (typically found on machine tools) to an Arduino and then sending those data via Bluetooth or serial to a display like [TouchDRO](http://www.yuriystoys.com/p/android-dro.html).
+This repository is a mirror of the latest code from [Rysiu M](http://rysium.com/projects/196-arduino-dro) for connecting cheap digital scales (typically found on machine tools) to an Arduino and then sending those data via Bluetooth or serial to a display like [TouchDRO](http://www.yuriystoys.com/p/android-dro.html).
 
 ---
 # Arduino DRO V5_11 (with Touch probe support, Hall tach support and "smart" rpm output, smooth DRO readings)
