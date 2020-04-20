@@ -878,7 +878,7 @@ inline unsigned int readProbeOutputData()
 #define SCALE_MM			(2560.0 / 25.4)
 #define SCALE_INCH			(2560.0)
 #define DISPLAY_WIDTH		9	/* one extra to account for the decimal point */
-#define DISPLAY_PRECISION	4
+#define DISPLAY_PRECISION	-4	/* number of digits after '.'. Negative means round last to 0/5 */
 
 /* formatDouble(value, width, precision) - format a number to fit on a display.
  *
@@ -896,13 +896,20 @@ inline unsigned int readProbeOutputData()
  * (0.02, 8, 4) => "___0.0200"
  */
 int formatDouble(double value, int width, int precision, char *buffer) {
-	if (precision > width) {
+	if (abs(precision) > width) {
 		Serial.print("precision > width\n");
 		return 0;
 	}
 
 	// scale to a long integer and round off at precision.
-	long scaled = (long)round(value * pow(10.0, precision));
+	long scaled = 0L;
+	if (precision > 0) {
+		scaled = (long)round(value * pow(10.0, precision));
+	} else {
+		// if negative precision then we want to round off the last digit to 1/2's
+		precision = -precision;
+		scaled = (long)((round((value * pow(10, precision - 1)) * 2.0) / 2.0) * 10.0);
+	}
 
 	// check for overflow if a positive number
 	if (scaled > 0 && scaled >= pow(10.0, width)) {
@@ -933,12 +940,6 @@ int formatDouble(double value, int width, int precision, char *buffer) {
 		}
 	}
 
-	if (buffer[0] >= '5') {
-		buffer[0] = '5';
-	} else {
-		buffer[0] = '0';
-	}
-
 	return 1;
 }
 
@@ -953,7 +954,6 @@ void showValue(long value, int displayAddress) {
 }
 
 bool absMode = true;
-volatile long lastReportTime = 0L;
 
 unsigned long time = 0;           // the last time the output pin was toggled
 unsigned long debounce = 200UL;   // the debounce time, increase if the output flickers
@@ -961,25 +961,56 @@ int previous = false;
 
 int switches[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
+/* debounce buttons on analog pin */
+/* return 0x00 = no button, 1=button 1, 2=button 2, 3=button 3... */
+int checkButtonsOnPin(int pin) {
+	int value1 = analogRead(pin);
+	// Serial.println(value1);
+	if (value1 > 855) {
+		return 0;
+	}
+
+	_delay_ms(50);
+	int value2 = analogRead(pin);
+	if (value1 < 170 && value2 < 170) {
+		return 1;
+	}
+
+	if (value1 < 515 && value2 < 515) {
+		return 2;
+	}
+
+	if (value1 < 855 && value2 < 855) {
+		return 3;
+	}
+
+	return 0;
+}
+
+int lastButtons = 0;
 void checkSwitches() {
-	int reading = digitalRead(A1);
-	if (reading == HIGH && previous == LOW && millis() - time > debounce) {
-		absMode = !absMode;
-    	time = millis();
-  	}
-	previous = reading;
-
-	if (!digitalRead(A0)) {
-		xZeroSetValue = xReportedValue;
+	int buttons = checkButtonsOnPin(A3);
+	if (buttons != lastButtons) {
+		lastButtons = buttons;
+		
+		switch (buttons) {
+			case 1:
+				Serial.println("Zero X");
+				xZeroSetValue = xReportedValue;
+				return;
+			case 2:
+				Serial.println("Zero Y");
+				yZeroSetValue = yReportedValue;
+				return;
+			case 3:
+				Serial.println("Zero Z");
+				zZeroSetValue = zReportedValue;
+				return;
+			default:
+				// fall through, no buttons
+				break;
+		}
 	}
-
-	if (!digitalRead(A1)) {
-		yZeroSetValue = yReportedValue;
-	}
-
-	int s3Value = analogRead(A3);
-	// Serial.print("A0=");
-	// Serial.println(s3Value);
 }
 
 #define IFRAME_TIMEDELAY (5 * 1000)	/* ms */
