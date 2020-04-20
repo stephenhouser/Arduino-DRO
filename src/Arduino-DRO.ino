@@ -607,8 +607,8 @@ volatile int updateFrequencyCounter;
 #if SCALE_X_ENABLED > 0
 volatile long xValue;
 volatile long xReportedValue;
-volatile long xLastReportedValue;
-volatile long xZeroSetValue;
+long xLastReportedValue;
+long xZeroSetValue;
 #endif
 #if SCALE_X_AVERAGE_ENABLED > 0
 volatile long axisLastReadX[AXIS_AVERAGE_COUNT];
@@ -619,8 +619,8 @@ volatile long axisAMAValueX;
 #if SCALE_Y_ENABLED > 0
 volatile long yValue;
 volatile long yReportedValue;
-volatile long yLastReportedValue;
-volatile long yZeroSetValue;
+long yLastReportedValue;
+long yZeroSetValue;
 #endif
 #if SCALE_Y_AVERAGE_ENABLED > 0
 volatile long axisLastReadY[AXIS_AVERAGE_COUNT];
@@ -631,8 +631,8 @@ volatile long axisAMAValueY;
 #if SCALE_Z_ENABLED > 0
 volatile long zValue;
 volatile long zReportedValue;
-volatile long zLastReportedValue;
-volatile long zZeroSetValue;
+long zLastReportedValue;
+long zZeroSetValue;
 #endif
 #if SCALE_Z_AVERAGE_ENABLED > 0
 volatile long axisLastReadZ[AXIS_AVERAGE_COUNT];
@@ -643,8 +643,8 @@ volatile long axisAMAValueZ;
 #if SCALE_W_ENABLED > 0
 volatile long wValue;
 volatile long wReportedValue;
-volatile long wLastReportedValue;
-volatile long wZeroSetValue;
+long wLastReportedValue;
+long wZeroSetValue;
 #endif
 #if SCALE_W_AVERAGE_ENABLED > 0
 volatile long axisLastReadW[AXIS_AVERAGE_COUNT];
