@@ -272,7 +272,7 @@ LedControl seven_seg = LedControl(12, 11, 10, 3);
 #define SCALE_W_AVERAGE_ENABLED 1
 
 // DRO rounding sample size.  Change it to 16 for machines with power feed
-#define AXIS_AVERAGE_COUNT 24
+#define AXIS_AVERAGE_COUNT 32
 
 // Tach config (if Tach is not connected change in the corresponding constant value from "1" to "0")
 // #define TACH_ENABLED 1
@@ -299,7 +299,7 @@ LedControl seven_seg = LedControl(12, 11, 10, 3);
 
 
 // Touch probe config (if Touch Probe is not connected change in the corresponding constant value from "1" to "0")
-#define PROBE_ENABLED 1
+#define PROBE_ENABLED 0
 #define INPUT_PROBE_PIN 8				// Pin 8 connected to Touch Probe
 
 // Touch probe invert signal config
@@ -607,6 +607,8 @@ volatile int updateFrequencyCounter;
 #if SCALE_X_ENABLED > 0
 volatile long xValue;
 volatile long xReportedValue;
+volatile long xLastReportedValue;
+volatile long xZeroSetValue;
 #endif
 #if SCALE_X_AVERAGE_ENABLED > 0
 volatile long axisLastReadX[AXIS_AVERAGE_COUNT];
@@ -617,6 +619,8 @@ volatile long axisAMAValueX;
 #if SCALE_Y_ENABLED > 0
 volatile long yValue;
 volatile long yReportedValue;
+volatile long yLastReportedValue;
+volatile long yZeroSetValue;
 #endif
 #if SCALE_Y_AVERAGE_ENABLED > 0
 volatile long axisLastReadY[AXIS_AVERAGE_COUNT];
@@ -627,6 +631,8 @@ volatile long axisAMAValueY;
 #if SCALE_Z_ENABLED > 0
 volatile long zValue;
 volatile long zReportedValue;
+volatile long zLastReportedValue;
+volatile long zZeroSetValue;
 #endif
 #if SCALE_Z_AVERAGE_ENABLED > 0
 volatile long axisLastReadZ[AXIS_AVERAGE_COUNT];
@@ -637,6 +643,8 @@ volatile long axisAMAValueZ;
 #if SCALE_W_ENABLED > 0
 volatile long wValue;
 volatile long wReportedValue;
+volatile long wLastReportedValue;
+volatile long wZeroSetValue;
 #endif
 #if SCALE_W_AVERAGE_ENABLED > 0
 volatile long axisLastReadW[AXIS_AVERAGE_COUNT];
@@ -679,6 +687,7 @@ void setup() {
 #endif
 	xValue = 0L;
 	xReportedValue = 0L;
+	xLastReportedValue = 0L;
 #if SCALE_X_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadX, axisLastReadPositionX, axisAMAValueX);
 #endif
@@ -692,6 +701,7 @@ void setup() {
 #endif
 	yValue = 0L;
 	yReportedValue = 0L;
+	yLastReportedValue = 0L;
 #if SCALE_Y_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadY, axisLastReadPositionY, axisAMAValueY);
 #endif
@@ -705,6 +715,7 @@ void setup() {
 #endif
 	zValue = 0L;
 	zReportedValue = 0L;
+	zLastReportedValue = 0L;
 #if SCALE_Z_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadZ, axisLastReadPositionZ, axisAMAValueZ);
 #endif
@@ -718,6 +729,7 @@ void setup() {
 #endif
 	wValue = 0L;
 	wReportedValue = 0L;
+	wLastReportedValue = 0L;
 #if SCALE_W_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadW, axisLastReadPositionW, axisAMAValueW);
 #endif
@@ -825,6 +837,7 @@ void setup() {
 	pinMode(A0, INPUT);
 	pinMode(A1, INPUT);
 	pinMode(A7, INPUT);
+	pinMode(A3, INPUT);
 }
 
 
@@ -866,6 +879,8 @@ inline unsigned int readProbeOutputData()
 #define SCALE_INCH			(2560.0)
 #define DISPLAY_WIDTH		9	/* one extra to account for the decimal point */
 #define DISPLAY_PRECISION	4
+
+#define REPORT_TIMEDELAY	1000	/* ms */
 
 /* formatDouble(value, width, precision) - format a number to fit on a display.
  *
@@ -920,6 +935,12 @@ int formatDouble(double value, int width, int precision, char *buffer) {
 		}
 	}
 
+	if (buffer[0] >= '5') {
+		buffer[0] = '5';
+	} else {
+		buffer[0] = '0';
+	}
+
 	return 1;
 }
 
@@ -934,23 +955,13 @@ void showValue(long value, int displayAddress) {
 }
 
 bool absMode = true;
-
-#if SCALE_X_ENABLED > 0
-long x0 = 0;
-#endif
-#if SCALE_Y_ENABLED > 0
-long y0 = 0;
-#endif
-#if SCALE_Z_ENABLED > 0
-long z0 = 0;
-#endif
-#if SCALE_W_ENABLED > 0
-long w0 = 0;
-#endif
+volatile long lastReportTime = 0L;
 
 unsigned long time = 0;           // the last time the output pin was toggled
 unsigned long debounce = 200UL;   // the debounce time, increase if the output flickers
 int previous = false;
+
+int switches[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 void checkSwitches() {
 	int reading = digitalRead(A1);
@@ -961,12 +972,16 @@ void checkSwitches() {
 	previous = reading;
 
 	if (!digitalRead(A0)) {
-		x0 = xReportedValue;
+		xZeroSetValue = xReportedValue;
 	}
 
 	if (!digitalRead(A1)) {
-		y0 = yReportedValue;
+		yZeroSetValue = yReportedValue;
 	}
+
+	int s3Value = analogRead(A3);
+	// Serial.print("A0=");
+	// Serial.println(s3Value);
 }
 
 // The loop function is called in an endless loop
@@ -977,6 +992,11 @@ void loop()
 
 		checkSwitches();
 
+		bool reportFlag = (millis() - lastReportTime) > REPORT_TIMEDELAY;
+		if (reportFlag) {
+			lastReportTime = millis();
+		}
+
 #if DRO_ENABLED > 0
 #if DRO_TYPE1_ENABLED
 		readEncoders();
@@ -986,39 +1006,52 @@ void loop()
 #if SCALE_X_AVERAGE_ENABLED > 0
 		scaleValueRounded(xReportedValue, axisLastReadX, axisLastReadPositionX, axisAMAValueX);
 #endif
-		Serial.print(F("X"));
-		Serial.print((long)xReportedValue);
-		Serial.print(F(";"));
-		showValue(xReportedValue - (absMode ? 0 : x0), 0);
+		if (reportFlag || (xReportedValue != xLastReportedValue)) {
+			Serial.print(F("X"));
+			Serial.print((long)xReportedValue);
+			Serial.print(F(";"));
+			showValue(xReportedValue - (absMode ? 0 : xZeroSetValue), 0);
+			xLastReportedValue = xReportedValue;
+		}
 #endif
 
 #if SCALE_Y_ENABLED > 0
 #if SCALE_Y_AVERAGE_ENABLED > 0
 		scaleValueRounded(yReportedValue, axisLastReadY, axisLastReadPositionY, axisAMAValueY);
 #endif
-		Serial.print(F("Y"));
-		Serial.print((long)yReportedValue);
-		Serial.print(F(";"));
-		showValue(yReportedValue - (absMode ? 0 : y0), 1);
+		if(reportFlag || (yReportedValue != yLastReportedValue)) {
+			Serial.print(F("Y"));
+			Serial.print((long)yReportedValue);
+			Serial.print(F(";"));
+			showValue(yReportedValue - (absMode ? 0 : yZeroSetValue), 1);
+			yLastReportedValue = yReportedValue;
+		}
 #endif
 
 #if SCALE_Z_ENABLED > 0
 #if SCALE_Z_AVERAGE_ENABLED > 0
 		scaleValueRounded(zReportedValue, axisLastReadZ, axisLastReadPositionZ, axisAMAValueZ);
 #endif
-		Serial.print(F("Z"));
-		Serial.print((long)zReportedValue);
-		Serial.print(F(";"));
-		showValue(zReportedValue, 2);
+		if(reportFlag || (zReportedValue != zLastReportedValue)) {
+			Serial.print(F("Z"));
+			Serial.print((long)zReportedValue);
+			Serial.print(F(";"));
+			showValue(zReportedValue - (absMode ? 0 : zZeroSetValue), 2);
+			zLastReportedValue = zReportedValue;
+		}
 #endif
 
 #if SCALE_W_ENABLED > 0
 #if SCALE_W_AVERAGE_ENABLED > 0
 		scaleValueRounded(wReportedValue, axisLastReadW, axisLastReadPositionW, axisAMAValueW);
 #endif
-		Serial.print(F("W"));
-		Serial.print((long)wReportedValue);
-		Serial.print(F(";"));
+		if(reportFlag || (wReportedValue != wLastReportedValue)) {
+			Serial.print(F("W"));
+			Serial.print((long)wReportedValue);
+			Serial.print(F(";"));
+			showValue(wReportedValue - (absMode ? 0 : wZeroSetValue), 3);
+			wLastReportedValue = wReportedValue;
+		}
 #endif
 
 #endif
