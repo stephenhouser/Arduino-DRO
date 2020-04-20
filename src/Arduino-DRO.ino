@@ -249,7 +249,7 @@ LedControl seven_seg = LedControl(12, 11, 10, 3);
 #define SCALE_X_ENABLED 1
 #define SCALE_Y_ENABLED 1
 #define SCALE_Z_ENABLED 1
-// #define SCALE_W_ENABLED 1
+#define SCALE_W_ENABLED 1
 
 // DRO config (if axis is connected to Quadrature Encoder scales through LS7366R-type shield change in the corresponding constant value from "0" to "1")
 #define SCALE_X_TYPE 0
@@ -272,7 +272,7 @@ LedControl seven_seg = LedControl(12, 11, 10, 3);
 #define SCALE_W_AVERAGE_ENABLED 1
 
 // DRO rounding sample size.  Change it to 16 for machines with power feed
-#define AXIS_AVERAGE_COUNT 32
+#define AXIS_AVERAGE_COUNT 24
 
 // Tach config (if Tach is not connected change in the corresponding constant value from "1" to "0")
 // #define TACH_ENABLED 1
@@ -687,7 +687,7 @@ void setup() {
 #endif
 	xValue = 0L;
 	xReportedValue = 0L;
-	xLastReportedValue = 0L;
+	xLastReportedValue = -99999L;
 #if SCALE_X_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadX, axisLastReadPositionX, axisAMAValueX);
 #endif
@@ -701,7 +701,7 @@ void setup() {
 #endif
 	yValue = 0L;
 	yReportedValue = 0L;
-	yLastReportedValue = 0L;
+	yLastReportedValue = -99999L;
 #if SCALE_Y_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadY, axisLastReadPositionY, axisAMAValueY);
 #endif
@@ -715,7 +715,7 @@ void setup() {
 #endif
 	zValue = 0L;
 	zReportedValue = 0L;
-	zLastReportedValue = 0L;
+	zLastReportedValue = -99999L;
 #if SCALE_Z_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadZ, axisLastReadPositionZ, axisAMAValueZ);
 #endif
@@ -729,7 +729,7 @@ void setup() {
 #endif
 	wValue = 0L;
 	wReportedValue = 0L;
-	wLastReportedValue = 0L;
+	wLastReportedValue = -99999L;
 #if SCALE_W_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadW, axisLastReadPositionW, axisAMAValueW);
 #endif
@@ -880,8 +880,6 @@ inline unsigned int readProbeOutputData()
 #define DISPLAY_WIDTH		9	/* one extra to account for the decimal point */
 #define DISPLAY_PRECISION	4
 
-#define REPORT_TIMEDELAY	1000	/* ms */
-
 /* formatDouble(value, width, precision) - format a number to fit on a display.
  *
  * formats the 'value' to fit in a character string of given 'width' with 
@@ -984,18 +982,27 @@ void checkSwitches() {
 	// Serial.println(s3Value);
 }
 
+#define IFRAME_TIMEDELAY (5 * 1000)	/* ms */
+bool iFrameTrigger = false;
+long iFrameLastTime = 0L;
+
+void iFrameFilter() {
+	if (millis() - iFrameLastTime > IFRAME_TIMEDELAY) {
+		iFrameTrigger = true;
+		iFrameLastTime = millis();
+	} else {
+		iFrameTrigger = false;
+	}
+}
+
 // The loop function is called in an endless loop
 void loop()
 {
 	if (tickTimerFlag) {
 		tickTimerFlag = false;
 
+		iFrameFilter();
 		checkSwitches();
-
-		bool reportFlag = (millis() - lastReportTime) > REPORT_TIMEDELAY;
-		if (reportFlag) {
-			lastReportTime = millis();
-		}
 
 #if DRO_ENABLED > 0
 #if DRO_TYPE1_ENABLED
@@ -1006,7 +1013,7 @@ void loop()
 #if SCALE_X_AVERAGE_ENABLED > 0
 		scaleValueRounded(xReportedValue, axisLastReadX, axisLastReadPositionX, axisAMAValueX);
 #endif
-		if (reportFlag || (xReportedValue != xLastReportedValue)) {
+		if (xReportedValue != xLastReportedValue || iFrameTrigger) {
 			Serial.print(F("X"));
 			Serial.print((long)xReportedValue);
 			Serial.print(F(";"));
@@ -1019,7 +1026,7 @@ void loop()
 #if SCALE_Y_AVERAGE_ENABLED > 0
 		scaleValueRounded(yReportedValue, axisLastReadY, axisLastReadPositionY, axisAMAValueY);
 #endif
-		if(reportFlag || (yReportedValue != yLastReportedValue)) {
+		if(yReportedValue != yLastReportedValue || iFrameTrigger) {
 			Serial.print(F("Y"));
 			Serial.print((long)yReportedValue);
 			Serial.print(F(";"));
@@ -1032,7 +1039,7 @@ void loop()
 #if SCALE_Z_AVERAGE_ENABLED > 0
 		scaleValueRounded(zReportedValue, axisLastReadZ, axisLastReadPositionZ, axisAMAValueZ);
 #endif
-		if(reportFlag || (zReportedValue != zLastReportedValue)) {
+		if(zReportedValue != zLastReportedValue || iFrameTrigger) {
 			Serial.print(F("Z"));
 			Serial.print((long)zReportedValue);
 			Serial.print(F(";"));
@@ -1045,7 +1052,7 @@ void loop()
 #if SCALE_W_AVERAGE_ENABLED > 0
 		scaleValueRounded(wReportedValue, axisLastReadW, axisLastReadPositionW, axisAMAValueW);
 #endif
-		if(reportFlag || (wReportedValue != wLastReportedValue)) {
+		if(wReportedValue != wLastReportedValue || iFrameTrigger) {
 			Serial.print(F("W"));
 			Serial.print((long)wReportedValue);
 			Serial.print(F(";"));
