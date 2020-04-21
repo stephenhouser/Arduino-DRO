@@ -828,7 +828,7 @@ void setup() {
 
 	sei();	
 
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		seven_seg.shutdown(i, false);
 		seven_seg.setIntensity(i, 8);
 		seven_seg.clearDisplay(i);
@@ -955,32 +955,31 @@ void showValue(long value, int displayAddress) {
 
 bool absMode = true;
 
-unsigned long time = 0;           // the last time the output pin was toggled
-unsigned long debounce = 200UL;   // the debounce time, increase if the output flickers
-int previous = false;
+#define ANALOG_DEBOUNCE_TIME	50
+#define ANALOG_HIGH_SW_LEVEL	600
+#define ANALOG_MED_SW_LEVEL		400
+#define ANALOG_LOW_SW_LEVEL		200
 
-int switches[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 /* debounce buttons on analog pin */
 /* return 0x00 = no button, 1=button 1, 2=button 2, 3=button 3... */
-int checkButtonsOnPin(int pin) {
+int debounceButtonsOnPin(int pin) {
 	int value1 = analogRead(pin);
 	// Serial.println(value1);
-	if (value1 > 855) {
+	if (value1 > ANALOG_HIGH_SW_LEVEL) {
 		return 0;
 	}
 
-	_delay_ms(50);
+	_delay_ms(ANALOG_DEBOUNCE_TIME);
 	int value2 = analogRead(pin);
-	if (value1 < 170 && value2 < 170) {
+	if (value1 < ANALOG_LOW_SW_LEVEL && value2 < ANALOG_LOW_SW_LEVEL) {
+		Serial.println(value2);
 		return 1;
-	}
-
-	if (value1 < 515 && value2 < 515) {
+	} else if (value1 < ANALOG_MED_SW_LEVEL && value2 < ANALOG_MED_SW_LEVEL) {
+		Serial.println(value2);
 		return 2;
-	}
-
-	if (value1 < 855 && value2 < 855) {
+	} else if (value1 < ANALOG_HIGH_SW_LEVEL && value2 < ANALOG_HIGH_SW_LEVEL) {
+		Serial.println(value2);
 		return 3;
 	}
 
@@ -989,21 +988,18 @@ int checkButtonsOnPin(int pin) {
 
 int lastButtons = 0;
 void checkSwitches() {
-	int buttons = checkButtonsOnPin(A3);
+	int buttons = debounceButtonsOnPin(A3);
 	if (buttons != lastButtons) {
 		lastButtons = buttons;
-		
+
 		switch (buttons) {
 			case 1:
-				Serial.println("Zero X");
 				xZeroSetValue = xReportedValue;
 				return;
 			case 2:
-				Serial.println("Zero Y");
 				yZeroSetValue = yReportedValue;
 				return;
 			case 3:
-				Serial.println("Zero Z");
 				zZeroSetValue = zReportedValue;
 				return;
 			default:
