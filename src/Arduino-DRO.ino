@@ -243,13 +243,14 @@
  * pin 11 is connected to the CLK 
  * pin 10 is connected to LOAD 
  */
-LedControl seven_seg = LedControl(12, 11, 10, 3);
+#define DISPLAY_COUNT	4
+LedControl seven_seg = LedControl(12, 11, 10, DISPLAY_COUNT);
 
 // DRO config (if axis is not connected change in the corresponding constant value from "1" to "0")
 #define SCALE_X_ENABLED 1
 #define SCALE_Y_ENABLED 1
 #define SCALE_Z_ENABLED 1
-#define SCALE_W_ENABLED 1
+#define SCALE_W_ENABLED 0
 
 // DRO config (if axis is connected to Quadrature Encoder scales through LS7366R-type shield change in the corresponding constant value from "0" to "1")
 #define SCALE_X_TYPE 0
@@ -275,7 +276,7 @@ LedControl seven_seg = LedControl(12, 11, 10, 3);
 #define AXIS_AVERAGE_COUNT 24
 
 // Tach config (if Tach is not connected change in the corresponding constant value from "1" to "0")
-// #define TACH_ENABLED 1
+#define TACH_ENABLED 1
 #define INPUT_TACH_PIN 7
 
 // Tach pre-scale value (number of tach sensor pulses per revolution)
@@ -587,6 +588,7 @@ volatile unsigned long tachTimerStart;
 volatile unsigned long tachReadoutRotationCount;
 volatile unsigned long tachReadoutMicrosec;
 volatile unsigned long tachReadoutRpm;
+unsigned long lastTachReadoutRpm;
 
 #if TACH_AVERAGE_COUNT > 1
 volatile unsigned long tachLastRead[TACH_AVERAGE_COUNT];
@@ -802,7 +804,7 @@ void setup() {
 	tachLastReadPosition = TACH_AVERAGE_COUNT - 1;
 #endif
 	tachUpdateFrequencyCounter = 0;
-
+	lastTachReadoutRpm = -99999L;
 #endif
 
 
@@ -828,10 +830,16 @@ void setup() {
 
 	sei();	
 
-	for (int i = 0; i < 4; i++) {
+	for (int i = 0; i < DISPLAY_COUNT; i++) {
 		seven_seg.shutdown(i, false);
 		seven_seg.setIntensity(i, 8);
 		seven_seg.clearDisplay(i);
+	}
+
+	for (int i = 0; i < DISPLAY_COUNT; i++) {
+		for (int d = 0; d < 8; d++) {
+			seven_seg.setChar(i, d, '-', false);
+		}
 	}
 
 	pinMode(A0, INPUT);
@@ -943,10 +951,37 @@ int formatDouble(double value, int width, int precision, char *buffer) {
 	return 1;
 }
 
-void showValue(long value, int displayAddress) {
+int formatInteger(long value, int width, char *buffer) {
+	// save sign as a char (for later use) and get absolute value
+	int sign = (value < 0) ? '-' : ' ';
+	value = labs(value);
+
+	for (int i = 0; i < width; i++) {
+		if (i && !value) {		// pad the string with spaces, always show at least 0
+			buffer[i] = sign;	// first time we append the sign character
+			sign = ' ';			// every other time we will append space
+		} else {
+			buffer[i] = '0' + (value % 10);
+			value /= 10;
+		}
+	}
+
+	return 1;
+}
+
+void showScaledValue(long value, int displayAddress) {
 	char buffer[10];
 	double scaledValue = value / SCALE_INCH;
 	if (formatDouble(scaledValue, DISPLAY_WIDTH, DISPLAY_PRECISION, buffer)) {
+		for (int i = 0; i < DISPLAY_WIDTH; i++) {
+			seven_seg.setChar(displayAddress, i, (buffer[i] & 0x7f), (buffer[i] & 0x80));
+		}
+	}
+}
+
+void showRawValue(long value, int displayAddress) {
+	char buffer[10];
+	if (formatInteger(value, DISPLAY_WIDTH, buffer)) {
 		for (int i = 0; i < DISPLAY_WIDTH; i++) {
 			seven_seg.setChar(displayAddress, i, (buffer[i] & 0x7f), (buffer[i] & 0x80));
 		}
@@ -1044,7 +1079,7 @@ void loop()
 			Serial.print(F("X"));
 			Serial.print((long)xReportedValue);
 			Serial.print(F(";"));
-			showValue(xReportedValue - (absMode ? 0 : xZeroSetValue), 0);
+			showScaledValue(xReportedValue - (absMode ? 0 : xZeroSetValue), 0);
 			xLastReportedValue = xReportedValue;
 		}
 #endif
@@ -1057,7 +1092,7 @@ void loop()
 			Serial.print(F("Y"));
 			Serial.print((long)yReportedValue);
 			Serial.print(F(";"));
-			showValue(yReportedValue - (absMode ? 0 : yZeroSetValue), 1);
+			showScaledValue(yReportedValue - (absMode ? 0 : yZeroSetValue), 1);
 			yLastReportedValue = yReportedValue;
 		}
 #endif
@@ -1070,7 +1105,7 @@ void loop()
 			Serial.print(F("Z"));
 			Serial.print((long)zReportedValue);
 			Serial.print(F(";"));
-			showValue(zReportedValue - (absMode ? 0 : zZeroSetValue), 2);
+			showScaledValue(zReportedValue - (absMode ? 0 : zZeroSetValue), 2);
 			zLastReportedValue = zReportedValue;
 		}
 #endif
@@ -1083,7 +1118,7 @@ void loop()
 			Serial.print(F("W"));
 			Serial.print((long)wReportedValue);
 			Serial.print(F(";"));
-			showValue(wReportedValue - (absMode ? 0 : wZeroSetValue), 3);
+			showScaledValue(wReportedValue - (absMode ? 0 : wZeroSetValue), 3);
 			wLastReportedValue = wReportedValue;
 		}
 #endif
@@ -1103,7 +1138,7 @@ void loop()
 			tachUpdateFrequencyCounter = 0;
 
 			// Output tach data
-			if (sendTachData) {
+			if (sendTachData && (lastTachReadoutRpm != tachReadoutRpm || iFrameTrigger)) {
 				sendTachData = false;
 
 				Serial.print(F("T"));
@@ -1115,7 +1150,10 @@ void loop()
 				Serial.print((unsigned long)tachReadoutRpm);
 #endif
 				Serial.print(F(";"));
+				showRawValue(tachReadoutRpm, 3);
+				lastTachReadoutRpm = tachReadoutRpm;
 			}
+
 		}
 #endif
 
