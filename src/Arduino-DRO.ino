@@ -276,11 +276,11 @@ LedControl seven_seg = LedControl(12, 11, 10, DISPLAY_COUNT);
 #define AXIS_AVERAGE_COUNT 24
 
 // Tach config (if Tach is not connected change in the corresponding constant value from "1" to "0")
-#define TACH_ENABLED 1
+#define TACH_ENABLED 0
 #define INPUT_TACH_PIN 7
 
 // Tach pre-scale value (number of tach sensor pulses per revolution)
-#define  TACH_PRESCALE 1
+#define  TACH_PRESCALE 4
 
 // Number of tach measurements to average 
 #define TACH_AVERAGE_COUNT 6
@@ -294,8 +294,8 @@ LedControl seven_seg = LedControl(12, 11, 10, DISPLAY_COUNT);
 // Tach RPM config
 #define MIN_RPM_DELAY 1200				// 1.2 sec calculates to low range = 50 rpm.
 
-// Tach LED feadback config
-#define OUTPUT_TACH_LED_ENABLED 1
+// Tach LED feadback configmm
+#define OUTPUT_TACH_LED_ENABLED 0
 #define OUTPUT_TACH_LED_PIN 9
 
 
@@ -611,6 +611,7 @@ volatile long xValue;
 volatile long xReportedValue;
 long xLastReportedValue;
 long xZeroSetValue;
+bool xAbsMode;
 #endif
 #if SCALE_X_AVERAGE_ENABLED > 0
 volatile long axisLastReadX[AXIS_AVERAGE_COUNT];
@@ -623,6 +624,7 @@ volatile long yValue;
 volatile long yReportedValue;
 long yLastReportedValue;
 long yZeroSetValue;
+bool yAbsMode;
 #endif
 #if SCALE_Y_AVERAGE_ENABLED > 0
 volatile long axisLastReadY[AXIS_AVERAGE_COUNT];
@@ -635,6 +637,7 @@ volatile long zValue;
 volatile long zReportedValue;
 long zLastReportedValue;
 long zZeroSetValue;
+bool zAbsMode;
 #endif
 #if SCALE_Z_AVERAGE_ENABLED > 0
 volatile long axisLastReadZ[AXIS_AVERAGE_COUNT];
@@ -647,6 +650,7 @@ volatile long wValue;
 volatile long wReportedValue;
 long wLastReportedValue;
 long wZeroSetValue;
+bool wAbsMode;
 #endif
 #if SCALE_W_AVERAGE_ENABLED > 0
 volatile long axisLastReadW[AXIS_AVERAGE_COUNT];
@@ -690,6 +694,8 @@ void setup() {
 	xValue = 0L;
 	xReportedValue = 0L;
 	xLastReportedValue = -99999L;
+	xZeroSetValue = 0L;
+	xAbsMode = true;
 #if SCALE_X_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadX, axisLastReadPositionX, axisAMAValueX);
 #endif
@@ -704,6 +710,8 @@ void setup() {
 	yValue = 0L;
 	yReportedValue = 0L;
 	yLastReportedValue = -99999L;
+	yZeroSetValue = 0L;
+	yAbsMode = true;
 #if SCALE_Y_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadY, axisLastReadPositionY, axisAMAValueY);
 #endif
@@ -718,6 +726,8 @@ void setup() {
 	zValue = 0L;
 	zReportedValue = 0L;
 	zLastReportedValue = -99999L;
+	zZeroSetValue = 0L;
+	zAbsMode = true;
 #if SCALE_Z_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadZ, axisLastReadPositionZ, axisAMAValueZ);
 #endif
@@ -732,6 +742,8 @@ void setup() {
 	wValue = 0L;
 	wReportedValue = 0L;
 	wLastReportedValue = -99999L;
+	wZeroSetValue = 0L;
+	wAbsMode = true;
 #if SCALE_W_AVERAGE_ENABLED > 0
 	initializeAxisAverage(axisLastReadW, axisLastReadPositionW, axisAMAValueW);
 #endif
@@ -844,8 +856,7 @@ void setup() {
 
 	pinMode(A0, INPUT);
 	pinMode(A1, INPUT);
-	pinMode(A7, INPUT);
-	pinMode(A3, INPUT);
+	pinMode(A2, INPUT);
 }
 
 
@@ -988,60 +999,8 @@ void showRawValue(long value, int displayAddress) {
 	}
 }
 
-bool absMode = true;
-
-#define ANALOG_DEBOUNCE_TIME	50
-#define ANALOG_HIGH_SW_LEVEL	600
-#define ANALOG_MED_SW_LEVEL		400
-#define ANALOG_LOW_SW_LEVEL		200
-
-
-/* debounce buttons on analog pin */
-/* return 0x00 = no button, 1=button 1, 2=button 2, 3=button 3... */
-int debounceButtonsOnPin(int pin) {
-	int value1 = analogRead(pin);
-	// Serial.println(value1);
-	if (value1 > ANALOG_HIGH_SW_LEVEL) {
-		return 0;
-	}
-
-	_delay_ms(ANALOG_DEBOUNCE_TIME);
-	int value2 = analogRead(pin);
-	if (value1 < ANALOG_LOW_SW_LEVEL && value2 < ANALOG_LOW_SW_LEVEL) {
-		Serial.println(value2);
-		return 1;
-	} else if (value1 < ANALOG_MED_SW_LEVEL && value2 < ANALOG_MED_SW_LEVEL) {
-		Serial.println(value2);
-		return 2;
-	} else if (value1 < ANALOG_HIGH_SW_LEVEL && value2 < ANALOG_HIGH_SW_LEVEL) {
-		Serial.println(value2);
-		return 3;
-	}
-
-	return 0;
-}
-
-int lastButtons = 0;
-void checkSwitches() {
-	int buttons = debounceButtonsOnPin(A3);
-	if (buttons != lastButtons) {
-		lastButtons = buttons;
-
-		switch (buttons) {
-			case 1:
-				xZeroSetValue = xReportedValue;
-				return;
-			case 2:
-				yZeroSetValue = yReportedValue;
-				return;
-			case 3:
-				zZeroSetValue = zReportedValue;
-				return;
-			default:
-				// fall through, no buttons
-				break;
-		}
-	}
+void showMode(int absMode, int displayAddress) {
+	seven_seg.setChar(displayAddress, 7, absMode ? 'A' : ' ', false);
 }
 
 #define IFRAME_TIMEDELAY (5 * 1000)	/* ms */
@@ -1054,6 +1013,86 @@ void iFrameFilter() {
 		iFrameLastTime = millis();
 	} else {
 		iFrameTrigger = false;
+	}
+}
+
+#define ANALOG_DEBOUNCE_TIME	50
+#define ANALOG_HIGH_SW_LEVEL	800
+#define ANALOG_MED_SW_LEVEL		450
+#define ANALOG_LOW_SW_LEVEL		200
+
+/* debounce buttons on analog pin */
+/* return 0x00 = no button, 1=button 1, 2=button 2, 3=button 3... */
+int debounceButtonsOnPin(int pin) {
+	int value1 = analogRead(pin);
+	if (value1 > ANALOG_HIGH_SW_LEVEL) {
+		return 0;
+	}
+
+	_delay_ms(ANALOG_DEBOUNCE_TIME);
+	int value2 = analogRead(pin);
+	if (value1 < ANALOG_LOW_SW_LEVEL && value2 < ANALOG_LOW_SW_LEVEL) {
+		return 0x01;
+	} else if (value1 < ANALOG_MED_SW_LEVEL && value2 < ANALOG_MED_SW_LEVEL) {
+		return 0x02;
+	} else if (value1 < ANALOG_HIGH_SW_LEVEL && value2 < ANALOG_HIGH_SW_LEVEL) {
+		return 0x04;
+	}
+
+	return 0;
+}
+
+unsigned int lastButtons = 0;
+void checkSwitches() {
+	//         _ - > +, _ Z Y X, _ Z Y X
+	// buttons 0 1 1 1, 0 1 1 1, 0 1 1 1
+	//           A2   ,   A1   ,  A0
+	// 
+	unsigned int buttons = 	debounceButtonsOnPin(A0) |		// X0, Y0, Z0
+ 							debounceButtonsOnPin(A1) << 4 |	// X a/i, Y a/i, Z a/i
+							debounceButtonsOnPin(A2) << 8 ;	// +, >, -
+	if (buttons != lastButtons) {
+		if (buttons != 0) {
+			Serial.print("B");
+			Serial.print(buttons);
+			Serial.print(";");
+		}
+
+		lastButtons = buttons;
+
+		switch (buttons) {
+			case 0x001:
+				xZeroSetValue = xReportedValue;
+				xAbsMode = false;
+				iFrameTrigger = true;
+				return;
+			case 0x002:
+				yZeroSetValue = yReportedValue;
+				yAbsMode = false;
+				iFrameTrigger = true;
+				return;
+			case 0x004:
+				zZeroSetValue = zReportedValue;
+				zAbsMode = false;
+				iFrameTrigger = true;
+				return;
+			case 0x010:
+				xAbsMode = !xAbsMode;
+				iFrameTrigger = true;
+				return;
+			case 0x020:
+				yAbsMode = !yAbsMode;
+				iFrameTrigger = true;
+				return;
+			case 0x040:
+				zAbsMode = !zAbsMode;
+				iFrameTrigger = true;
+				return;
+
+			default:
+				// fall through, no buttons
+				break;
+		}
 	}
 }
 
@@ -1079,7 +1118,8 @@ void loop()
 			Serial.print(F("X"));
 			Serial.print((long)xReportedValue);
 			Serial.print(F(";"));
-			showScaledValue(xReportedValue - (absMode ? 0 : xZeroSetValue), 0);
+			showScaledValue(xReportedValue - (xAbsMode ? 0 : xZeroSetValue), 0);
+			showMode(xAbsMode, 0);
 			xLastReportedValue = xReportedValue;
 		}
 #endif
@@ -1092,7 +1132,8 @@ void loop()
 			Serial.print(F("Y"));
 			Serial.print((long)yReportedValue);
 			Serial.print(F(";"));
-			showScaledValue(yReportedValue - (absMode ? 0 : yZeroSetValue), 1);
+			showScaledValue(yReportedValue - (yAbsMode ? 0 : yZeroSetValue), 1);
+			showMode(yAbsMode, 1);
 			yLastReportedValue = yReportedValue;
 		}
 #endif
@@ -1105,7 +1146,8 @@ void loop()
 			Serial.print(F("Z"));
 			Serial.print((long)zReportedValue);
 			Serial.print(F(";"));
-			showScaledValue(zReportedValue - (absMode ? 0 : zZeroSetValue), 2);
+			showScaledValue(zReportedValue - (zAbsMode ? 0 : zZeroSetValue), 2);
+			showMode(zAbsMode, 2);
 			zLastReportedValue = zReportedValue;
 		}
 #endif
@@ -1118,7 +1160,8 @@ void loop()
 			Serial.print(F("W"));
 			Serial.print((long)wReportedValue);
 			Serial.print(F(";"));
-			showScaledValue(wReportedValue - (absMode ? 0 : wZeroSetValue), 3);
+			showScaledValue(wReportedValue - (wAbsMode ? 0 : wZeroSetValue), 3);
+			showMode(wAbsMode, 3);
 			wLastReportedValue = wReportedValue;
 		}
 #endif
@@ -1128,7 +1171,6 @@ void loop()
 
 		// print Tach rpm to serial port
 #if TACH_ENABLED > 0
-
 		// Calculate tach data
 		sendTachData = sendTachOutputData() || sendTachData;
 
@@ -1138,7 +1180,7 @@ void loop()
 			tachUpdateFrequencyCounter = 0;
 
 			// Output tach data
-			if (sendTachData && (lastTachReadoutRpm != tachReadoutRpm || iFrameTrigger)) {
+			if (sendTachData /*&& (lastTachReadoutRpm != tachReadoutRpm || iFrameTrigger)*/) {
 				sendTachData = false;
 
 				Serial.print(F("T"));
