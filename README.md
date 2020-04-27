@@ -4,6 +4,8 @@ Firmware for Arduino DRO with up to 4 Axis display, Tachometer, Touch Probe, and
 
 This repository is heavily based on the v6.0 code from [Rysiu M](http://rysium.com/projects/197-arduino-dro-q) for connecting cheap digital scales (typically found on machine tools) to an Arduino and sending those data via Bluetooth or serial to a display like [TouchDRO](http://www.yuriystoys.com/p/android-dro.html). The display and interaction portions are influenced by the [People's DRO](https://www.chipmaker.ru/topic/143676) on [chipmaker.ru](https://www.chipmaker.ru) (or at least that's what Google Translate told me the name was).
 
+![Arduino DRO connected to TouchDRO](images/Arduino-DRO-TouchDRO.jpeg)
+
 ## Why Another Android DRO Project
 
 I just couldn't find the one I was looking for. RysiuM's is great for working with Touch DRO, but does not have a local non-connected to an Android tablet display option. Oleg A.'s People's DRO has local display, but no ability to connect to Touch DRO. I wanted both. 
