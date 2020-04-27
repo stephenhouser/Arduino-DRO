@@ -237,14 +237,52 @@
 		Default value = 4
 
  */
-#include "LedControl.h"
+
+/* === Display DRO === */
+#include "LedController.hpp"
+
 /*
  * pin 12 is connected to the DataIn 
  * pin 11 is connected to the CLK 
  * pin 10 is connected to LOAD 
  */
-#define DISPLAY_COUNT	4
-LedControl seven_seg = LedControl(12, 11, 10, DISPLAY_COUNT);
+
+#define DISPLAY_COUNT			4
+#define DISPLAY_WIDTH			9	// one extra to account for the decimal point 
+#define DISPLAY_PRECISION		-4	// number of digits after '.'. Negative means round last to 0/5 
+
+#define SCALE_MM				(2560.0 / 25.4)
+#define SCALE_INCH				(2560.0)
+
+#define IFRAME_TIMEDELAY 		(5 * 1000)	/* ms */
+
+// TODO: Factor out Switch Ports to a #define 
+#define ANALOG_BUTTON_COUNT		3
+
+#define ANALOG_DEBOUNCE_TIME	100
+#define ANALOG_IGNORE_TIME		500
+#define ANALOG_HIGH_SW_LEVEL	800
+#define ANALOG_MED_SW_LEVEL		450
+#define ANALOG_LOW_SW_LEVEL		200
+
+LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT);
+
+bool iFrameTrigger = false;		// Should we force a display and data update?
+unsigned long iFrameLastTime = 0L;		// The last time we forced a data push to serial
+
+int buttonInputPins[ANALOG_BUTTON_COUNT] = { A0, A1, A2 };	// Pins to configure as analog decoded button inputs
+unsigned int lastButtons = 0;	// The last button set we saw. To keep from repeating ourselves
+unsigned long lastButtonTime = 0L;
+
+typedef enum {			// state machine for UI and operations
+	show_values = 0,	// normal operating mode
+	set_axis_half		// setting an axis to 1/2 value, select axis
+} _state;
+
+_state currentState;	// current state of our UI state machine
+
+/* === Display DRO === */
+
 
 // DRO config (if axis is not connected change in the corresponding constant value from "1" to "0")
 #define SCALE_X_ENABLED 1
@@ -556,7 +594,6 @@ LedControl seven_seg = LedControl(12, 11, 10, DISPLAY_COUNT);
 #define PROBE_LED_OUTPUT_PORT PORTB
 #endif
 
-
 #if DRO_TYPE1_ENABLED
 #include <SPI.h>
 #endif
@@ -665,10 +702,8 @@ volatile unsigned int encoderValue3;
 volatile unsigned int encoderValue4;
 #endif
 
-
 //The setup function is called once at startup of the sketch
 void setup() {
-	
 	cli();
 	sendTachData = false;
 	tickTimerFlag = false;
@@ -819,7 +854,6 @@ void setup() {
 	lastTachReadoutRpm = -99999L;
 #endif
 
-
 	//initialize touch probe values
 #if PROBE_ENABLED > 0
 	// Setup tach port for input
@@ -842,10 +876,11 @@ void setup() {
 
 	sei();	
 
+	/* === Display DRO === */
 	for (int i = 0; i < DISPLAY_COUNT; i++) {
-		seven_seg.shutdown(i, false);
-		seven_seg.setIntensity(i, 8);
-		seven_seg.clearDisplay(i);
+		seven_seg.activateAllSegments();
+		seven_seg.setIntensity(8);
+		seven_seg.clearMatrix();
 	}
 
 	for (int i = 0; i < DISPLAY_COUNT; i++) {
@@ -854,50 +889,13 @@ void setup() {
 		}
 	}
 
-	pinMode(A0, INPUT);
-	pinMode(A1, INPUT);
-	pinMode(A2, INPUT);
-}
-
-
-// Read touch probe status
-#if PROBE_ENABLED > 0
-inline unsigned int readProbeOutputData()
-{
-	if (PROBE_INPUT_PORT & _BV(PROBE_PIN_BIT)) {
-	// Return probe signal 
-#if PROBE_INVERT == 0
-#if OUTPUT_PROBE_LED_ENABLED > 0
-		PROBE_LED_OUTPUT_PORT |= _BV(PROBE_LED_PIN_BIT);
-#endif
-		return 1;
-#else
-#if OUTPUT_PROBE_LED_ENABLED > 0
-		PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
-#endif
-		return 0;
-#endif
-	} else {
-#if PROBE_INVERT == 0
-#if OUTPUT_PROBE_LED_ENABLED > 0
-		PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
-#endif
-		return  0;
-#else
-#if OUTPUT_PROBE_LED_ENABLED > 0
-		PROBE_LED_OUTPUT_PORT |= _BV(PROBE_LED_PIN_BIT);
-#endif
-		return 1;
-#endif
+	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
+		pinMode(buttonInputPins[i], INPUT);
 	}
+
+	currentState = show_values;
 }
-#endif
-
-
-#define SCALE_MM			(2560.0 / 25.4)
-#define SCALE_INCH			(2560.0)
-#define DISPLAY_WIDTH		9	/* one extra to account for the decimal point */
-#define DISPLAY_PRECISION	-4	/* number of digits after '.'. Negative means round last to 0/5 */
+/* === Display DRO === */
 
 /* formatDouble(value, width, precision) - format a number to fit on a display.
  *
@@ -999,13 +997,16 @@ void showRawValue(long value, int displayAddress) {
 	}
 }
 
+void showText(char *text, int displayAddress) {
+	for (int i = DISPLAY_WIDTH - 2; i >= 0; i--) {
+		char displayChar = *text ? *(text++) : ' ';
+		seven_seg.setChar(displayAddress, i, (displayChar & 0x7f), (displayChar & 0x80));
+	}
+}
+
 void showMode(int absMode, int displayAddress) {
 	seven_seg.setChar(displayAddress, 7, absMode ? 'A' : ' ', false);
 }
-
-#define IFRAME_TIMEDELAY (5 * 1000)	/* ms */
-bool iFrameTrigger = false;
-long iFrameLastTime = 0L;
 
 void iFrameFilter() {
 	if (millis() - iFrameLastTime > IFRAME_TIMEDELAY) {
@@ -1016,41 +1017,132 @@ void iFrameFilter() {
 	}
 }
 
-#define ANALOG_DEBOUNCE_TIME	50
-#define ANALOG_HIGH_SW_LEVEL	800
-#define ANALOG_MED_SW_LEVEL		450
-#define ANALOG_LOW_SW_LEVEL		200
-
 /* debounce buttons on analog pin */
 /* return 0x00 = no button, 1=button 1, 2=button 2, 3=button 3... */
-int debounceButtonsOnPin(int pin) {
-	int value1 = analogRead(pin);
-	if (value1 > ANALOG_HIGH_SW_LEVEL) {
-		return 0;
+unsigned int debounceButtons() {
+	unsigned int buttons = 0x0000;
+
+	int buttonValues[ANALOG_BUTTON_COUNT];
+	bool seemsLegit = false;
+
+	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
+		buttonValues[i] = analogRead(buttonInputPins[i]);
+		if (buttonValues[i] > ANALOG_HIGH_SW_LEVEL) {
+			seemsLegit = true;
+		}
 	}
 
-	_delay_ms(ANALOG_DEBOUNCE_TIME);
-	int value2 = analogRead(pin);
-	if (value1 < ANALOG_LOW_SW_LEVEL && value2 < ANALOG_LOW_SW_LEVEL) {
-		return 0x01;
-	} else if (value1 < ANALOG_MED_SW_LEVEL && value2 < ANALOG_MED_SW_LEVEL) {
-		return 0x02;
-	} else if (value1 < ANALOG_HIGH_SW_LEVEL && value2 < ANALOG_HIGH_SW_LEVEL) {
-		return 0x04;
+	if (seemsLegit) {
+		_delay_ms(ANALOG_DEBOUNCE_TIME);
+
+		for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
+			int secondValue = analogRead(buttonInputPins[i]);
+
+			if (buttonValues[i] < ANALOG_LOW_SW_LEVEL && secondValue < ANALOG_LOW_SW_LEVEL) {
+				buttons |= 0x01 << (i * 4);
+			} else if (buttonValues[i] < ANALOG_MED_SW_LEVEL && secondValue < ANALOG_MED_SW_LEVEL) {
+				buttons |= 0x02 << (i * 4);
+			} else if (buttonValues[i] < ANALOG_HIGH_SW_LEVEL && secondValue < ANALOG_HIGH_SW_LEVEL) {
+				buttons |= 0x04 << (i * 4);
+			}
+		}
 	}
 
-	return 0;
+	return buttons;
 }
 
-unsigned int lastButtons = 0;
-void checkSwitches() {
-	//         _ - > +, _ Z Y X, _ Z Y X
-	// buttons 0 1 1 1, 0 1 1 1, 0 1 1 1
-	//           A2   ,   A1   ,  A0
-	// 
-	unsigned int buttons = 	debounceButtonsOnPin(A0) |		// X0, Y0, Z0
- 							debounceButtonsOnPin(A1) << 4 |	// X a/i, Y a/i, Z a/i
-							debounceButtonsOnPin(A2) << 8 ;	// +, >, -
+_state operatingState(unsigned int buttons) {
+	_state nextState = show_values;
+
+	switch (buttons) {
+		case 0x001:	// X0
+			xZeroSetValue = xReportedValue;
+			xAbsMode = false;
+			break;
+		case 0x002:	// Y0
+			yZeroSetValue = yReportedValue;
+			yAbsMode = false;
+			break;
+		case 0x004:	// Z0
+			zZeroSetValue = zReportedValue;
+			zAbsMode = false;
+			break;
+		case 0x010:	// X abs/inc
+			xAbsMode = !xAbsMode;
+			break;
+		case 0x020:	// Y abs/inc
+			yAbsMode = !yAbsMode;
+			break;
+		case 0x040:	// Z abs/inc
+			zAbsMode = !zAbsMode;
+			break;
+
+		case 0x100:	// +
+			nextState = set_axis_half;
+			break;
+
+		case 0x200: // >
+			break;
+
+		case 0x400: // -
+			break;
+
+		default:
+			// fall through, invalid or no buttons
+			break;
+	}
+
+	return nextState;
+}
+
+_state setAxisHalfState(unsigned int buttons) {
+	seven_seg.setChar(0, 7, '-', false);
+	seven_seg.setChar(1, 7, '-', false);
+	seven_seg.setChar(2, 7, '-', false);
+	showText("1-2 Axis", 3);
+	_state nextState = set_axis_half;
+
+	switch (buttons) {
+		case 0x001:	// X0
+		case 0x010:	// X abs/inc
+			xZeroSetValue = (xReportedValue + xZeroSetValue ) / 2;
+			xAbsMode = false;
+			nextState = show_values;
+			break;
+		case 0x002:	// Y0
+		case 0x020:	// Y abs/inc
+			yZeroSetValue = (yReportedValue + yZeroSetValue ) / 2;
+			yAbsMode = false;
+			nextState = show_values;
+			break;
+		case 0x004:	// Z0
+		case 0x040:	// Z abs/inc
+			zZeroSetValue = (zReportedValue + zZeroSetValue ) / 2;
+			zAbsMode = false;
+			nextState = show_values;
+			break;
+		case 0x100:	// +
+		case 0x200: // >
+		case 0x400: // -
+			nextState = show_values;
+			break;
+		default:
+			// fall through, invalid or no buttons
+			break;
+	}
+
+	return nextState;
+}
+
+bool checkSwitches() {
+	bool updateDisplay = false;
+	_state nextState = currentState;
+
+	if (millis() - lastButtonTime < ANALOG_IGNORE_TIME) {
+		return false;
+	}
+
+	unsigned int buttons = debounceButtons();
 	if (buttons != lastButtons) {
 		if (buttons != 0) {
 			Serial.print("B");
@@ -1059,42 +1151,64 @@ void checkSwitches() {
 		}
 
 		lastButtons = buttons;
+		updateDisplay = true;	// signal a redraw when button state changes
+	}
 
-		switch (buttons) {
-			case 0x001:
-				xZeroSetValue = xReportedValue;
-				xAbsMode = false;
-				iFrameTrigger = true;
-				return;
-			case 0x002:
-				yZeroSetValue = yReportedValue;
-				yAbsMode = false;
-				iFrameTrigger = true;
-				return;
-			case 0x004:
-				zZeroSetValue = zReportedValue;
-				zAbsMode = false;
-				iFrameTrigger = true;
-				return;
-			case 0x010:
-				xAbsMode = !xAbsMode;
-				iFrameTrigger = true;
-				return;
-			case 0x020:
-				yAbsMode = !yAbsMode;
-				iFrameTrigger = true;
-				return;
-			case 0x040:
-				zAbsMode = !zAbsMode;
-				iFrameTrigger = true;
-				return;
+	switch (currentState) {
+		case show_values:
+			nextState = operatingState(buttons);
+			break;
+		case set_axis_half:
+			nextState = setAxisHalfState(buttons);
+			break;
+		default:
+			break;			
+	}
 
-			default:
-				// fall through, no buttons
-				break;
-		}
+	if (nextState != currentState) {
+		currentState = nextState;
+		updateDisplay = true;	// signal a redraw when state changes
+
+		Serial.print("S");
+		Serial.print(currentState);
+		Serial.print(";");
+	}
+
+	return updateDisplay;
+}
+/* === Display DRO === */
+
+// Read touch probe status
+#if PROBE_ENABLED > 0
+inline unsigned int readProbeOutputData() {
+	if (PROBE_INPUT_PORT & _BV(PROBE_PIN_BIT)) {
+	// Return probe signal 
+#if PROBE_INVERT == 0
+#if OUTPUT_PROBE_LED_ENABLED > 0
+		PROBE_LED_OUTPUT_PORT |= _BV(PROBE_LED_PIN_BIT);
+#endif
+		return 1;
+#else
+#if OUTPUT_PROBE_LED_ENABLED > 0
+		PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
+#endif
+		return 0;
+#endif
+	} else {
+#if PROBE_INVERT == 0
+#if OUTPUT_PROBE_LED_ENABLED > 0
+		PROBE_LED_OUTPUT_PORT &= ~_BV(PROBE_LED_PIN_BIT);
+#endif
+		return  0;
+#else
+#if OUTPUT_PROBE_LED_ENABLED > 0
+		PROBE_LED_OUTPUT_PORT |= _BV(PROBE_LED_PIN_BIT);
+#endif
+		return 1;
+#endif
 	}
 }
+#endif
 
 // The loop function is called in an endless loop
 void loop()
@@ -1102,8 +1216,10 @@ void loop()
 	if (tickTimerFlag) {
 		tickTimerFlag = false;
 
-		iFrameFilter();
-		checkSwitches();
+		iFrameFilter();	// slow the dispatch of events for older tablets
+		if (checkSwitches()) {
+			iFrameTrigger = true;
+		}
 
 #if DRO_ENABLED > 0
 #if DRO_TYPE1_ENABLED
@@ -1118,8 +1234,11 @@ void loop()
 			Serial.print(F("X"));
 			Serial.print((long)xReportedValue);
 			Serial.print(F(";"));
-			showScaledValue(xReportedValue - (xAbsMode ? 0 : xZeroSetValue), 0);
-			showMode(xAbsMode, 0);
+			if (currentState == show_values) {
+				// TODO: Factor out hardcoded display number for X Axis
+				showScaledValue(xReportedValue - (xAbsMode ? 0 : xZeroSetValue), 0);
+				showMode(xAbsMode, 0);
+			}
 			xLastReportedValue = xReportedValue;
 		}
 #endif
@@ -1132,8 +1251,11 @@ void loop()
 			Serial.print(F("Y"));
 			Serial.print((long)yReportedValue);
 			Serial.print(F(";"));
-			showScaledValue(yReportedValue - (yAbsMode ? 0 : yZeroSetValue), 1);
-			showMode(yAbsMode, 1);
+			if (currentState == show_values) {
+				// TODO: Factor out hardcoded display number for Y Axis
+				showScaledValue(yReportedValue - (yAbsMode ? 0 : yZeroSetValue), 1);
+				showMode(yAbsMode, 1);
+			}
 			yLastReportedValue = yReportedValue;
 		}
 #endif
@@ -1146,8 +1268,11 @@ void loop()
 			Serial.print(F("Z"));
 			Serial.print((long)zReportedValue);
 			Serial.print(F(";"));
-			showScaledValue(zReportedValue - (zAbsMode ? 0 : zZeroSetValue), 2);
-			showMode(zAbsMode, 2);
+			if (currentState == show_values) {
+				// TODO: Factor out hardcoded display number for Z Axis
+				showScaledValue(zReportedValue - (zAbsMode ? 0 : zZeroSetValue), 2);
+				showMode(zAbsMode, 2);
+			}
 			zLastReportedValue = zReportedValue;
 		}
 #endif
@@ -1160,14 +1285,16 @@ void loop()
 			Serial.print(F("W"));
 			Serial.print((long)wReportedValue);
 			Serial.print(F(";"));
-			showScaledValue(wReportedValue - (wAbsMode ? 0 : wZeroSetValue), 3);
-			showMode(wAbsMode, 3);
+			if (currentState == show_values) {
+				// TODO: Factor out hardcoded display number for W Axis
+				showScaledValue(wReportedValue - (wAbsMode ? 0 : wZeroSetValue), 3);
+				showMode(wAbsMode, 3);
+			}
 			wLastReportedValue = wReportedValue;
 		}
 #endif
 
 #endif
-
 
 		// print Tach rpm to serial port
 #if TACH_ENABLED > 0
@@ -1192,13 +1319,15 @@ void loop()
 				Serial.print((unsigned long)tachReadoutRpm);
 #endif
 				Serial.print(F(";"));
-				showRawValue(tachReadoutRpm, 3);
+				if (currentState == show_values) {
+					// TODO: Factor out hardcoded display number for RPM
+					showRawValue(tachReadoutRpm, 3);
+				}
 				lastTachReadoutRpm = tachReadoutRpm;
 			}
 
 		}
 #endif
-
 
 		// print Touch Probe data to serial port
 #if PROBE_ENABLED > 0
@@ -1212,10 +1341,8 @@ void loop()
 	}
 }
 
-
 //initializes clock timer
-void setupClkTimer()
-{
+void setupClkTimer() {
 	updateFrequencyCounter = 0;
 
 	TCCR2A = 0;			// set entire TCCR2A register to 0
@@ -1243,7 +1370,6 @@ void setupClkTimer()
 #endif
 	// enable timer compare interrupt A and B
 	TIMSK2 |= _BV(OCIE2A) | _BV(OCIE2B);
-	
 }
 
 
@@ -1252,7 +1378,6 @@ void setupClkTimer()
 
 // Timer 2 interrupt B ( Switches clock pin from low to high 21 times) at the end of clock counter limit
 ISR(TIMER2_COMPB_vect) {
-
 	// Set counter back to zero  
 	TCNT2  = 0;  
 #if DRO_TYPE0_ENABLED > 0
@@ -1266,8 +1391,7 @@ ISR(TIMER2_COMPB_vect) {
 
 
 // Timer 2 interrupt A ( Switches clock pin from high to low) at the end of clock PWM Duty counter limit
-ISR(TIMER2_COMPA_vect) 
-{
+ISR(TIMER2_COMPA_vect)  {
 #if DRO_TYPE0_ENABLED > 0
 	// Control the scale clock for only first 21 loops
 	if (updateFrequencyCounter < SCALE_CLK_PULSES) {
@@ -1356,7 +1480,6 @@ ISR(TIMER2_COMPA_vect)
 	if ( updateFrequencyCounter >= updateFrequencyCounterLimit) {
 		updateFrequencyCounter = 0;
 	}
-
 }
 
 
@@ -1406,23 +1529,18 @@ inline void readEncoderValue() {
 #if DRO_ENABLED > 0
 #if SCALE_AVERAGE_ENABLED > 0
 inline void	initializeAxisAverage(volatile long axisLastRead[], volatile int &axisLastReadPosition, volatile long &axisAMAValue) {
-	
 	for (axisLastReadPosition = 0; axisLastReadPosition < (int) AXIS_AVERAGE_COUNT; axisLastReadPosition++) {
 		axisLastRead[axisLastReadPosition] = 0;
 	}
 	axisLastReadPosition = 0;
 	axisAMAValue = 0;
-
 }
 
-inline void scaleValueRounded(volatile long &ReportedValue, volatile long axisLastRead[], volatile int &axisLastReadPosition, volatile long &axisAMAValue)
-{
-
+inline void scaleValueRounded(volatile long &ReportedValue, volatile long axisLastRead[], volatile int &axisLastReadPosition, volatile long &axisAMAValue) {
 	int last_pos; 
 	int first_pos;
 	int prev_pos;
 	int filter_pos;
-
 
 	long dir;
 	long minValue = longMax;
@@ -1449,8 +1567,7 @@ inline void scaleValueRounded(volatile long &ReportedValue, volatile long axisLa
     prev_pos = first_pos;
     for (filter_pos = (first_pos + 1) % AXIS_AVERAGE_COUNT;
          filter_pos != first_pos;
-         filter_pos = (filter_pos + 1) % AXIS_AVERAGE_COUNT)
-    {
+         filter_pos = (filter_pos + 1) % AXIS_AVERAGE_COUNT) {
         minValue = MIN(minValue, axisLastRead[filter_pos]);
         maxValue = MAX(maxValue, axisLastRead[filter_pos]);
         volatility += ABS(axisLastRead[filter_pos] - axisLastRead[prev_pos]);
@@ -1458,8 +1575,7 @@ inline void scaleValueRounded(volatile long &ReportedValue, volatile long axisLa
     }
 
     // Just return the read if there is no volatility to avoid divide by 0
-    if (volatility == (long) 0)
-    {
+    if (volatility == (long) 0) {
 		axisAMAValue = axisLastRead[last_pos] * ((long) 100);
 		return;
     }
@@ -1470,8 +1586,7 @@ inline void scaleValueRounded(volatile long &ReportedValue, volatile long axisLa
 	minValue = minValue * ((long) 100);
     valueRange = maxValue - minValue;
     if (axisAMAValue > maxValue + valueRange + ((long) 100) ||
-        axisAMAValue < minValue - valueRange - ((long) 100))
-    {
+        axisAMAValue < minValue - valueRange - ((long) 100)) {
 		axisAMAValue = axisLastRead[last_pos] * ((long) 100);
 		return;
     }
@@ -1486,27 +1601,26 @@ inline void scaleValueRounded(volatile long &ReportedValue, volatile long axisLa
 
     ReportedValue = (axisAMAValue + ((long) 50)) / ((long) 100);
 	return;
-
 }
 
-inline long MIN(long value1, long value2){
-	if(value1 > value2) {
+inline long MIN(long value1, long value2) {
+	if (value1 > value2) {
 		return value2;
 	} else {
 		return value1;
 	}
 }
 
-inline long MAX(long value1, long value2){
-	if(value1 > value2) {
+inline long MAX(long value1, long value2) {
+	if (value1 > value2) {
 		return value1;
 	} else {
 		return value2;
 	}
 }
 
-inline long ABS(long value){
-	if(value < 0) {
+inline long ABS(long value) {
+	if (value < 0) {
 		return -value;
 	} else {
 		return value;
@@ -1516,16 +1630,13 @@ inline long ABS(long value){
 #endif
 #endif
 
-
 // Calculate the tach rpm 
 #if TACH_ENABLED > 0
-inline boolean sendTachOutputData()
-{
+inline boolean sendTachOutputData() {
 	unsigned long microSeconds;
 	unsigned long tachRotationCount;
 	unsigned long tachTimer;
 	unsigned long currentMicros;
-
 
 	// Read data from the last interrupt (stop interrupts to read a pair in sync)
 	cli();
@@ -1540,15 +1651,15 @@ inline boolean sendTachOutputData()
 		return false;
 	}
 		
-	// We have at least one tick on rpm sensor so calculate the time between ticks
+	
 	if (tachRotationCount != 0) {
+		// We have at least one tick on rpm sensor so calculate the time between ticks
 		tachReadoutRotationCount = tachRotationCount;
 		tachReadoutMicrosec = tachTimer - tachTimerStart;
 
 		tachTimerStart = tachTimer;
-
-	// if no ticks on rpm sensor...
-	} else {
+	} else { 	
+		// if no ticks on rpm sensor...
 		currentMicros = micros();
 		// reset timer if clock overlapses
 		if (currentMicros < tachTimerStart) {
@@ -1660,15 +1771,13 @@ inline boolean sendTachOutputData()
 #endif
 
 	return true;
-
 }
 #endif
 
 
 // Interrupt to read tach pin change
 #if TACH_ENABLED > 0
-ISR(TACH_INTERRUPT_VECTOR)
-{
+ISR(TACH_INTERRUPT_VECTOR) {
 	if (TACH_INPUT_PORT & _BV(TACH_PIN_BIT)) {
 		// record timestamp of change in port input
 		tachInterruptTimer = micros();
@@ -1683,5 +1792,3 @@ ISR(TACH_INTERRUPT_VECTOR)
 	}
 }
 #endif
-
-
