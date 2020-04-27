@@ -251,6 +251,12 @@
 #define DISPLAY_WIDTH			9	// one extra to account for the decimal point 
 #define DISPLAY_PRECISION		-4	// number of digits after '.'. Negative means round last to 0/5 
 
+#define DISPLAY_MENU_ADDRESS	3
+
+#define MODE_CHAR_ABS	'A'
+#define MODE_CHAR_INC	' '
+#define MODE_CHAR_SEL	'-'
+
 #define SCALE_MM				(2560.0 / 25.4)
 #define SCALE_INCH				(2560.0)
 
@@ -265,7 +271,8 @@
 #define ANALOG_MED_SW_LEVEL		450
 #define ANALOG_LOW_SW_LEVEL		200
 
-LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT);
+// LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT, false);
+LedController seven_seg = LedController(11, 13, 10, DISPLAY_COUNT, true);
 
 bool iFrameTrigger = false;		// Should we force a display and data update?
 unsigned long iFrameLastTime = 0L;		// The last time we forced a data push to serial
@@ -275,10 +282,12 @@ unsigned int lastButtons = 0;	// The last button set we saw. To keep from repeat
 unsigned long lastButtonTime = 0L;
 
 typedef enum {			// state machine for UI and operations
-	show_values = 0,	// normal operating mode
+	invalid_state = 0,	// unset state.
+	show_values,		// normal operating mode
 	set_axis_half		// setting an axis to 1/2 value, select axis
 } _state;
 
+_state lastState;
 _state currentState;	// current state of our UI state machine
 
 /* === Display DRO === */
@@ -894,6 +903,7 @@ void setup() {
 	}
 
 	currentState = show_values;
+	lastState = invalid_state;
 }
 /* === Display DRO === */
 
@@ -1004,8 +1014,12 @@ void showText(char *text, int displayAddress) {
 	}
 }
 
-void showMode(int absMode, int displayAddress) {
-	seven_seg.setChar(displayAddress, 7, absMode ? 'A' : ' ', false);
+void showMode(char mode, int displayAddress) {
+	seven_seg.setChar(displayAddress, 7, mode, false);
+}
+
+void showMenu(char *text) {
+	showText(text, DISPLAY_MENU_ADDRESS);
 }
 
 void iFrameFilter() {
@@ -1019,33 +1033,24 @@ void iFrameFilter() {
 
 /* debounce buttons on analog pin */
 /* return 0x00 = no button, 1=button 1, 2=button 2, 3=button 3... */
+int lastButtonValues[ANALOG_BUTTON_COUNT];
+
 unsigned int debounceButtons() {
 	unsigned int buttons = 0x0000;
 
-	int buttonValues[ANALOG_BUTTON_COUNT];
-	bool seemsLegit = false;
 
 	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
-		buttonValues[i] = analogRead(buttonInputPins[i]);
-		if (buttonValues[i] > ANALOG_HIGH_SW_LEVEL) {
-			seemsLegit = true;
+		int buttonValue = analogRead(buttonInputPins[i]);
+
+		if (lastButtonValues[i] < ANALOG_LOW_SW_LEVEL && buttonValue < ANALOG_LOW_SW_LEVEL) {
+			buttons |= 0x01 << (i * 4);
+		} else if (lastButtonValues[i] < ANALOG_MED_SW_LEVEL && buttonValue < ANALOG_MED_SW_LEVEL) {
+			buttons |= 0x02 << (i * 4);
+		} else if (lastButtonValues[i] < ANALOG_HIGH_SW_LEVEL && buttonValue < ANALOG_HIGH_SW_LEVEL) {
+			buttons |= 0x04 << (i * 4);
 		}
-	}
 
-	if (seemsLegit) {
-		_delay_ms(ANALOG_DEBOUNCE_TIME);
-
-		for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
-			int secondValue = analogRead(buttonInputPins[i]);
-
-			if (buttonValues[i] < ANALOG_LOW_SW_LEVEL && secondValue < ANALOG_LOW_SW_LEVEL) {
-				buttons |= 0x01 << (i * 4);
-			} else if (buttonValues[i] < ANALOG_MED_SW_LEVEL && secondValue < ANALOG_MED_SW_LEVEL) {
-				buttons |= 0x02 << (i * 4);
-			} else if (buttonValues[i] < ANALOG_HIGH_SW_LEVEL && secondValue < ANALOG_HIGH_SW_LEVEL) {
-				buttons |= 0x04 << (i * 4);
-			}
-		}
+		lastButtonValues[i] = buttonValue;
 	}
 
 	return buttons;
@@ -1053,6 +1058,10 @@ unsigned int debounceButtons() {
 
 _state operatingState(unsigned int buttons) {
 	_state nextState = show_values;
+
+	if (lastState != show_values) {		// enter state
+		showMenu("        ");
+	}
 
 	switch (buttons) {
 		case 0x001:	// X0
@@ -1082,9 +1091,21 @@ _state operatingState(unsigned int buttons) {
 			break;
 
 		case 0x200: // >
+			xAbsMode = true;
+			xZeroSetValue = 0;
+			yAbsMode = true;
+			yZeroSetValue = 0;
+			zAbsMode = true;			
+			zZeroSetValue = 0;
 			break;
 
 		case 0x400: // -
+			xZeroSetValue = xReportedValue;
+			xAbsMode = false;
+			yZeroSetValue = yReportedValue;
+			yAbsMode = false;
+			zZeroSetValue = zReportedValue;
+			zAbsMode = false;			
 			break;
 
 		default:
@@ -1096,32 +1117,40 @@ _state operatingState(unsigned int buttons) {
 }
 
 _state setAxisHalfState(unsigned int buttons) {
-	seven_seg.setChar(0, 7, '-', false);
-	seven_seg.setChar(1, 7, '-', false);
-	seven_seg.setChar(2, 7, '-', false);
-	showText("1-2 Axis", 3);
 	_state nextState = set_axis_half;
+
+	if (lastState != set_axis_half) {	// entering state
+		showMode(MODE_CHAR_SEL, 0);
+		showMode(MODE_CHAR_SEL, 1);
+		showMode(MODE_CHAR_SEL, 2);
+		showMenu("1-2 Axis");
+	}
 
 	switch (buttons) {
 		case 0x001:	// X0
-		case 0x010:	// X abs/inc
-			xZeroSetValue = (xReportedValue + xZeroSetValue ) / 2;
+			xZeroSetValue = (xReportedValue + (xAbsMode ? 0 : xZeroSetValue) ) / 2;
 			xAbsMode = false;
 			nextState = show_values;
 			break;
 		case 0x002:	// Y0
-		case 0x020:	// Y abs/inc
-			yZeroSetValue = (yReportedValue + yZeroSetValue ) / 2;
+			yZeroSetValue = (yReportedValue + (yAbsMode ? 0 : yZeroSetValue) ) / 2;
 			yAbsMode = false;
 			nextState = show_values;
 			break;
-		case 0x004:	// Z0
-		case 0x040:	// Z abs/inc
-			zZeroSetValue = (zReportedValue + zZeroSetValue ) / 2;
+		case 0x004:	// Z abs/inc
+			zZeroSetValue = (zReportedValue + (zAbsMode ? 0 : zZeroSetValue) ) / 2;
 			zAbsMode = false;
 			nextState = show_values;
 			break;
+
+		case 0x010:	// X abs/inc
+		case 0x020:	// Y abs/inc
+		case 0x040:	// Z0
+			break;	// ignore
+
 		case 0x100:	// +
+			break;	// double-press?
+
 		case 0x200: // >
 		case 0x400: // -
 			nextState = show_values;
@@ -1150,28 +1179,33 @@ bool checkSwitches() {
 			Serial.print(";");
 		}
 
+		switch (currentState) {
+			case show_values:
+				nextState = operatingState(buttons);
+				break;
+
+			case set_axis_half:
+				nextState = setAxisHalfState(buttons);
+				break;
+
+			default:
+				break;			
+		}
+
 		lastButtons = buttons;
 		updateDisplay = true;	// signal a redraw when button state changes
 	}
 
-	switch (currentState) {
-		case show_values:
-			nextState = operatingState(buttons);
-			break;
-		case set_axis_half:
-			nextState = setAxisHalfState(buttons);
-			break;
-		default:
-			break;			
-	}
 
 	if (nextState != currentState) {
+		lastState = currentState;
 		currentState = nextState;
-		updateDisplay = true;	// signal a redraw when state changes
 
 		Serial.print("S");
 		Serial.print(currentState);
 		Serial.print(";");
+
+		updateDisplay = true;	// signal a redraw when state changes
 	}
 
 	return updateDisplay;
@@ -1221,6 +1255,13 @@ void loop()
 			iFrameTrigger = true;
 		}
 
+		// if (lastState != currentState || iFrameTrigger) {
+		// 	Serial.print("S");
+		// 	Serial.print(lastState);
+		// 	Serial.print(currentState);
+		// 	Serial.print(";");
+		// }
+
 #if DRO_ENABLED > 0
 #if DRO_TYPE1_ENABLED
 		readEncoders();
@@ -1237,7 +1278,7 @@ void loop()
 			if (currentState == show_values) {
 				// TODO: Factor out hardcoded display number for X Axis
 				showScaledValue(xReportedValue - (xAbsMode ? 0 : xZeroSetValue), 0);
-				showMode(xAbsMode, 0);
+				showMode(xAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 0);
 			}
 			xLastReportedValue = xReportedValue;
 		}
@@ -1254,7 +1295,7 @@ void loop()
 			if (currentState == show_values) {
 				// TODO: Factor out hardcoded display number for Y Axis
 				showScaledValue(yReportedValue - (yAbsMode ? 0 : yZeroSetValue), 1);
-				showMode(yAbsMode, 1);
+				showMode(yAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 1);
 			}
 			yLastReportedValue = yReportedValue;
 		}
@@ -1271,7 +1312,7 @@ void loop()
 			if (currentState == show_values) {
 				// TODO: Factor out hardcoded display number for Z Axis
 				showScaledValue(zReportedValue - (zAbsMode ? 0 : zZeroSetValue), 2);
-				showMode(zAbsMode, 2);
+				showMode(zAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 2);
 			}
 			zLastReportedValue = zReportedValue;
 		}
@@ -1288,7 +1329,7 @@ void loop()
 			if (currentState == show_values) {
 				// TODO: Factor out hardcoded display number for W Axis
 				showScaledValue(wReportedValue - (wAbsMode ? 0 : wZeroSetValue), 3);
-				showMode(wAbsMode, 3);
+				showMode(wAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 3);
 			}
 			wLastReportedValue = wReportedValue;
 		}
