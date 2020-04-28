@@ -1011,7 +1011,7 @@ void showRawValue(long value, int displayAddress) {
 	}
 }
 
-void showText(char *text, int displayAddress) {
+void showText(const char *text, int displayAddress) {
 	for (int i = DISPLAY_WIDTH - 2; i >= 0; i--) {
 		char displayChar = *text ? *(text++) : ' ';
 		seven_seg.setChar(displayAddress, i, (displayChar & 0x7f), (displayChar & 0x80));
@@ -1022,7 +1022,7 @@ void showMode(char mode, int displayAddress) {
 	seven_seg.setChar(displayAddress, 7, mode, false);
 }
 
-void showMenu(char *text) {
+void showMenu(const char *text) {
 	showText(text, DISPLAY_MENU_ADDRESS);
 }
 
@@ -1057,6 +1057,15 @@ unsigned int debounceButtons() {
 	}
 
 	return buttons;
+}
+
+void zeroAllAxes() {
+	xZeroSetValue = xReportedValue;
+	xAbsMode = false;
+	yZeroSetValue = yReportedValue;
+	yAbsMode = false;
+	zZeroSetValue = zReportedValue;
+	zAbsMode = false;		
 }
 
 _state operatingState(unsigned int buttons) {
@@ -1106,12 +1115,7 @@ _state operatingState(unsigned int buttons) {
 			break;
 
 		case 0x400: // - zero all -
-			xZeroSetValue = xReportedValue;
-			xAbsMode = false;
-			yZeroSetValue = yReportedValue;
-			yAbsMode = false;
-			zZeroSetValue = zReportedValue;
-			zAbsMode = false;			
+			zeroAllAxes();	
 			break;
 
 		default:	// fall through, invalid or no buttons, ignore
@@ -1210,12 +1214,17 @@ _state setDisplayBrightness(unsigned int buttons) {
 	return nextState;
 }
 
+typedef struct {
+	const char *title;
+	_state state;
+} _menu;
 
 int menuSelected = 0;
-char *menu[3] = {
-	"bright",
-	"zero",
-	"boobies"
+_menu menu[] = {
+	{ "bright", 	set_brightness },
+	{ "zero", 		zero_all },
+	{ "1-2 axis",	set_axis_half },
+	{ "boobies", 	show_values }
 };
 
 _state showDisplayMenu(unsigned int buttons) {
@@ -1226,11 +1235,11 @@ _state showDisplayMenu(unsigned int buttons) {
 			break;
 
 		case 0x100:	// +
-			menuSelected = MIN(++menuSelected, 2);
+			menuSelected = MIN(++menuSelected, (sizeof(menu) / sizeof(_menu) - 1));
 			break;
 
 		case 0x200: // >
-			nextState = show_values;
+			nextState = menu[menuSelected].state;
 			break;
 
 		case 0x400:	// -
@@ -1241,7 +1250,7 @@ _state showDisplayMenu(unsigned int buttons) {
 			break;
 	}
 
-	showMenu(menu[menuSelected]);
+	showMenu(menu[menuSelected].title);
 	return nextState;
 }
 
@@ -1276,6 +1285,11 @@ bool checkSwitches() {
 
 			case set_brightness:
 				nextState = setDisplayBrightness(buttons);
+				break;
+
+			case zero_all:
+				zeroAllAxes();	
+				nextState = show_values;
 				break;
 
 			default:
