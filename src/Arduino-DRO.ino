@@ -267,12 +267,13 @@
 
 #define ANALOG_DEBOUNCE_TIME	100
 #define ANALOG_IGNORE_TIME		500
-#define ANALOG_HIGH_SW_LEVEL	800
+#define ANALOG_HIGH_SW_LEVEL	750
 #define ANALOG_MED_SW_LEVEL		450
 #define ANALOG_LOW_SW_LEVEL		200
 
 // LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT, false);
 LedController seven_seg = LedController(11, 13, 10, DISPLAY_COUNT, true);
+int displayBrightness = 8;
 
 bool iFrameTrigger = false;		// Should we force a display and data update?
 unsigned long iFrameLastTime = 0L;		// The last time we forced a data push to serial
@@ -284,7 +285,8 @@ unsigned long lastButtonTime = 0L;
 typedef enum {			// state machine for UI and operations
 	invalid_state = 0,	// unset state.
 	show_values,		// normal operating mode
-	set_axis_half		// setting an axis to 1/2 value, select axis
+	set_axis_half,		// setting an axis to 1/2 value, select axis
+	set_brightness
 } _state;
 
 _state lastState;
@@ -888,7 +890,7 @@ void setup() {
 	/* === Display DRO === */
 	for (int i = 0; i < DISPLAY_COUNT; i++) {
 		seven_seg.activateAllSegments();
-		seven_seg.setIntensity(8);
+		seven_seg.setIntensity(displayBrightness);
 		seven_seg.clearMatrix();
 	}
 
@@ -1038,7 +1040,6 @@ int lastButtonValues[ANALOG_BUTTON_COUNT];
 unsigned int debounceButtons() {
 	unsigned int buttons = 0x0000;
 
-
 	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
 		int buttonValue = analogRead(buttonInputPins[i]);
 
@@ -1091,12 +1092,7 @@ _state operatingState(unsigned int buttons) {
 			break;
 
 		case 0x200: // >
-			xAbsMode = true;
-			xZeroSetValue = 0;
-			yAbsMode = true;
-			yZeroSetValue = 0;
-			zAbsMode = true;			
-			zZeroSetValue = 0;
+			nextState = set_brightness;
 			break;
 
 		case 0x400: // -
@@ -1163,6 +1159,40 @@ _state setAxisHalfState(unsigned int buttons) {
 	return nextState;
 }
 
+
+_state setDisplayBrightness(unsigned int buttons) {
+	_state nextState = set_brightness;
+
+	if (lastState != set_brightness) {	// entering state
+		showMode(MODE_CHAR_SEL, 0);
+		showMode(MODE_CHAR_SEL, 1);
+		showMode(MODE_CHAR_SEL, 2);
+		showMenu(" +up -dn");
+	}
+
+	switch (buttons) {
+		case 0x100:	// +
+			displayBrightness = MIN(++displayBrightness, 15);
+			seven_seg.setIntensity(displayBrightness);
+			break;
+
+		case 0x200: // >
+			nextState = show_values;
+			break;
+
+		case 0x400: // -
+			displayBrightness = MAX(--displayBrightness, 0);
+			seven_seg.setIntensity(displayBrightness);
+			break;
+	}
+
+	// Serial.print("I");
+	// Serial.print(displayBrightness);
+	// Serial.print(";");
+	return nextState;
+}
+
+
 bool checkSwitches() {
 	bool updateDisplay = false;
 	_state nextState = currentState;
@@ -1186,6 +1216,10 @@ bool checkSwitches() {
 
 			case set_axis_half:
 				nextState = setAxisHalfState(buttons);
+				break;
+
+			case set_brightness:
+				nextState = setDisplayBrightness(buttons);
 				break;
 
 			default:
@@ -1254,13 +1288,6 @@ void loop()
 		if (checkSwitches()) {
 			iFrameTrigger = true;
 		}
-
-		// if (lastState != currentState || iFrameTrigger) {
-		// 	Serial.print("S");
-		// 	Serial.print(lastState);
-		// 	Serial.print(currentState);
-		// 	Serial.print(";");
-		// }
 
 #if DRO_ENABLED > 0
 #if DRO_TYPE1_ENABLED
