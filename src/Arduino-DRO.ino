@@ -267,9 +267,9 @@
 
 #define ANALOG_DEBOUNCE_TIME	100
 #define ANALOG_IGNORE_TIME		500
-#define ANALOG_HIGH_SW_LEVEL	900
-#define ANALOG_MED_SW_LEVEL		600
-#define ANALOG_LOW_SW_LEVEL		300
+#define ANALOG_HIGH_SW_LEVEL	855
+#define ANALOG_MED_SW_LEVEL		515
+#define ANALOG_LOW_SW_LEVEL		170
 
 // LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT, false);
 LedController seven_seg = LedController(11, 13, 10, DISPLAY_COUNT, true);
@@ -327,17 +327,17 @@ _state currentState;	// current state of our UI state machine
 #define AXIS_AVERAGE_COUNT 24
 
 // Tach config (if Tach is not connected change in the corresponding constant value from "1" to "0")
-#define TACH_ENABLED 0
-#define INPUT_TACH_PIN 7
+#define TACH_ENABLED 1
+#define INPUT_TACH_PIN 8
 
 // Tach pre-scale value (number of tach sensor pulses per revolution)
-#define  TACH_PRESCALE 4
+#define  TACH_PRESCALE 1
 
 // Number of tach measurements to average 
 #define TACH_AVERAGE_COUNT 6
 
 // This is rounding for tachometer display (set to 0 to disable or 1 for 1% rounding)
-#define TACH_ROUND 2
+#define TACH_ROUND 0
 
 // Tach data format
 #define TACH_RAW_DATA_FORMAT 0			// single value format: T<rpm>;
@@ -1044,9 +1044,6 @@ unsigned int debounceButtons() {
 
 	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
 		int buttonValue = analogRead(buttonInputPins[i]);
-		if (buttonValue < 1000) {
-			Serial.println(buttonValue);
-		}
 
 		if (lastButtonValues[i] < ANALOG_LOW_SW_LEVEL && buttonValue < ANALOG_LOW_SW_LEVEL) {
 			// Serial.println(buttonValue);
@@ -1360,6 +1357,8 @@ void loop()
 	if (tickTimerFlag) {
 		tickTimerFlag = false;
 
+		// Serial.print(digitalRead(7));
+
 		iFrameFilter();	// slow the dispatch of events for older tablets
 		if (checkSwitches()) {
 			iFrameTrigger = true;
@@ -1451,7 +1450,7 @@ void loop()
 			tachUpdateFrequencyCounter = 0;
 
 			// Output tach data
-			if (sendTachData /*&& (lastTachReadoutRpm != tachReadoutRpm || iFrameTrigger)*/) {
+			if (sendTachData && (lastTachReadoutRpm != tachReadoutRpm || iFrameTrigger)) {
 				sendTachData = false;
 
 				Serial.print(F("T"));
