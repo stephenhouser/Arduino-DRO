@@ -267,9 +267,9 @@
 
 #define ANALOG_DEBOUNCE_TIME	100
 #define ANALOG_IGNORE_TIME		500
-#define ANALOG_HIGH_SW_LEVEL	750
-#define ANALOG_MED_SW_LEVEL		450
-#define ANALOG_LOW_SW_LEVEL		200
+#define ANALOG_HIGH_SW_LEVEL	900
+#define ANALOG_MED_SW_LEVEL		600
+#define ANALOG_LOW_SW_LEVEL		300
 
 // LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT, false);
 LedController seven_seg = LedController(11, 13, 10, DISPLAY_COUNT, true);
@@ -1044,12 +1044,18 @@ unsigned int debounceButtons() {
 
 	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
 		int buttonValue = analogRead(buttonInputPins[i]);
+		if (buttonValue < 1000) {
+			Serial.println(buttonValue);
+		}
 
 		if (lastButtonValues[i] < ANALOG_LOW_SW_LEVEL && buttonValue < ANALOG_LOW_SW_LEVEL) {
+			// Serial.println(buttonValue);
 			buttons |= 0x01 << (i * 4);
 		} else if (lastButtonValues[i] < ANALOG_MED_SW_LEVEL && buttonValue < ANALOG_MED_SW_LEVEL) {
+			// Serial.println(buttonValue);
 			buttons |= 0x02 << (i * 4);
 		} else if (lastButtonValues[i] < ANALOG_HIGH_SW_LEVEL && buttonValue < ANALOG_HIGH_SW_LEVEL) {
+			// Serial.println(buttonValue);
 			buttons |= 0x04 << (i * 4);
 		}
 
