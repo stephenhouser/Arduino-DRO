@@ -285,8 +285,10 @@ unsigned long lastButtonTime = 0L;
 typedef enum {			// state machine for UI and operations
 	invalid_state = 0,	// unset state.
 	show_values,		// normal operating mode
-	set_axis_half,		// setting an axis to 1/2 value, select axis
-	set_brightness
+	show_menu,			// show the config menu (> when in show_values)
+	set_axis_half,		// setting an axis to 1/2 value, select axis (+ when in show_values)
+	zero_all,			// zero all axes (- when in show_values)
+	set_brightness		// setting brightness
 } _state;
 
 _state lastState;
@@ -1065,37 +1067,45 @@ _state operatingState(unsigned int buttons) {
 	}
 
 	switch (buttons) {
+		case 0x000:	// no button press
+			break;
+
 		case 0x001:	// X0
 			xZeroSetValue = xReportedValue;
 			xAbsMode = false;
 			break;
+
 		case 0x002:	// Y0
 			yZeroSetValue = yReportedValue;
 			yAbsMode = false;
 			break;
+
 		case 0x004:	// Z0
 			zZeroSetValue = zReportedValue;
 			zAbsMode = false;
 			break;
+
 		case 0x010:	// X abs/inc
 			xAbsMode = !xAbsMode;
 			break;
+
 		case 0x020:	// Y abs/inc
 			yAbsMode = !yAbsMode;
 			break;
+
 		case 0x040:	// Z abs/inc
 			zAbsMode = !zAbsMode;
 			break;
 
-		case 0x100:	// +
+		case 0x100:	// + set axis to 1/2 aka find center
 			nextState = set_axis_half;
 			break;
 
-		case 0x200: // >
-			nextState = set_brightness;
+		case 0x200: // > show menu
+			nextState = show_menu;
 			break;
 
-		case 0x400: // -
+		case 0x400: // - zero all -
 			xZeroSetValue = xReportedValue;
 			xAbsMode = false;
 			yZeroSetValue = yReportedValue;
@@ -1104,8 +1114,7 @@ _state operatingState(unsigned int buttons) {
 			zAbsMode = false;			
 			break;
 
-		default:
-			// fall through, invalid or no buttons
+		default:	// fall through, invalid or no buttons, ignore
 			break;
 	}
 
@@ -1123,16 +1132,21 @@ _state setAxisHalfState(unsigned int buttons) {
 	}
 
 	switch (buttons) {
+		case 0x000:	// no button press ignore
+			break;
+
 		case 0x001:	// X0
 			xZeroSetValue = (xReportedValue + (xAbsMode ? 0 : xZeroSetValue) ) / 2;
 			xAbsMode = false;
 			nextState = show_values;
 			break;
+
 		case 0x002:	// Y0
 			yZeroSetValue = (yReportedValue + (yAbsMode ? 0 : yZeroSetValue) ) / 2;
 			yAbsMode = false;
 			nextState = show_values;
 			break;
+
 		case 0x004:	// Z abs/inc
 			zZeroSetValue = (zReportedValue + (zAbsMode ? 0 : zZeroSetValue) ) / 2;
 			zAbsMode = false;
@@ -1141,24 +1155,22 @@ _state setAxisHalfState(unsigned int buttons) {
 
 		case 0x010:	// X abs/inc
 		case 0x020:	// Y abs/inc
-		case 0x040:	// Z0
-			break;	// ignore
+		case 0x040:	// Z abs/inc
+			nextState = show_values;
+			break;	// cancel and return to operating mode
 
 		case 0x100:	// +
-			break;	// double-press?
-
 		case 0x200: // >
 		case 0x400: // -
 			nextState = show_values;
-			break;
-		default:
-			// fall through, invalid or no buttons
+			break;	// cancel and return to operating mode
+
+		default:	// fall through, invalid or no buttons, ignore
 			break;
 	}
 
 	return nextState;
 }
-
 
 _state setDisplayBrightness(unsigned int buttons) {
 	_state nextState = set_brightness;
@@ -1171,6 +1183,9 @@ _state setDisplayBrightness(unsigned int buttons) {
 	}
 
 	switch (buttons) {
+		case 0x000:	// no button press, ignore
+			break;
+
 		case 0x100:	// +
 			displayBrightness = MIN(++displayBrightness, 15);
 			seven_seg.setIntensity(displayBrightness);
@@ -1180,9 +1195,12 @@ _state setDisplayBrightness(unsigned int buttons) {
 			nextState = show_values;
 			break;
 
-		case 0x400: // -
+		case 0x400:	// -
 			displayBrightness = MAX(--displayBrightness, 0);
 			seven_seg.setIntensity(displayBrightness);
+			break;
+
+		default:	// fall through, invalid or no buttons, ignore
 			break;
 	}
 
@@ -1192,6 +1210,40 @@ _state setDisplayBrightness(unsigned int buttons) {
 	return nextState;
 }
 
+
+int menuSelected = 0;
+char *menu[3] = {
+	"bright",
+	"zero",
+	"boobies"
+};
+
+_state showDisplayMenu(unsigned int buttons) {
+	_state nextState = show_menu;
+
+	switch (buttons) {
+		case 0x000:	// no button press, ignore
+			break;
+
+		case 0x100:	// +
+			menuSelected = MIN(++menuSelected, 2);
+			break;
+
+		case 0x200: // >
+			nextState = show_values;
+			break;
+
+		case 0x400:	// -
+			menuSelected = MAX(--menuSelected, 0);
+			break;
+
+		default:	// fall through, invalid or no buttons, ignore
+			break;
+	}
+
+	showMenu(menu[menuSelected]);
+	return nextState;
+}
 
 bool checkSwitches() {
 	bool updateDisplay = false;
@@ -1216,6 +1268,10 @@ bool checkSwitches() {
 
 			case set_axis_half:
 				nextState = setAxisHalfState(buttons);
+				break;
+
+			case show_menu:
+				nextState = showDisplayMenu(buttons);
 				break;
 
 			case set_brightness:
