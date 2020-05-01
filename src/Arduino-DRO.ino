@@ -302,21 +302,29 @@ typedef struct {
 	_state state;
 } _menu;
 
+/* the ordering of the menu items is really just my prefernece and
+ * predisposition to hit the down button when thinking of non-saved
+ * settings. So there's no real logic or reason here.
+ * menuSelected gets set to the first non-saved setting 1/2 axis
+ * again, just as my preference and thought this will be the most used
+ * selection.
+ */
 _menu menu[] = {
-	{ "zero all",	zero_all },
-	{ "set value", 	set_axis_value },	
-	{ "1-2 axis",	set_axis_half },
-	/* non-saved settings above this point */
-	/* Default menuSelected is here! == 2 */
-	/* saved settings below this point */
-	{ "reverse", 	reverse_axis },	
-	{ "units",		set_axis_half },
-	{ "bright", 	set_brightness },
+	{ " hell ", 	show_values },
 	{ "CPI",		set_axis_count },
-	{ "boobies", 	show_values }
+	{ "bright", 	set_brightness },
+	{ "units",		set_axis_half },
+	{ "reverse", 	reverse_axis },	
+	/* saved settings above this point, UP to get to them */
+
+	/* not saved settings below this point DOWN to get to them*/
+	{ "1-2 axis",	set_axis_half },
+	{ "set value", 	set_axis_value },	
+	{ "zero all",	zero_all },
+	{ "boobies", 	show_values },
 };
 
-int menuSelected = 2;
+int menuSelected = 5;
 
 typedef enum {
 	button_none			= 0x000,
