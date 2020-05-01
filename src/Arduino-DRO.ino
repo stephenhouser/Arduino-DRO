@@ -240,6 +240,7 @@
 
 /* === Display DRO === */
 #include "LedController.hpp"
+#include <EEPROM.h>
 
 /*
  * pin 12 is connected to the DataIn 
@@ -273,7 +274,6 @@
 
 // LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT, false);
 LedController seven_seg = LedController(11, 13, 10, DISPLAY_COUNT, true);
-int displayBrightness = 8;
 
 bool iFrameTrigger = false;		// Should we force a display and data update?
 unsigned long iFrameLastTime = 0L;		// The last time we forced a data push to serial
@@ -288,11 +288,192 @@ typedef enum {			// state machine for UI and operations
 	show_menu,			// show the config menu (> when in show_values)
 	set_axis_half,		// setting an axis to 1/2 value, select axis (+ when in show_values)
 	zero_all,			// zero all axes (- when in show_values)
-	set_brightness		// setting brightness
+	set_brightness,		// setting brightness
+	set_axis_value,		// set axis to a specific value
+	reverse_axis,		// reverse axis orientation (+/-)
+	set_axis_count,	// set the counts per inch for axis
 } _state;
 
 _state lastState;
 _state currentState;	// current state of our UI state machine
+
+typedef struct {
+	const char *title;
+	_state state;
+} _menu;
+
+int menuSelected = 0;
+_menu menu[] = {
+	{ "1-2 axis",	set_axis_half },
+	{ "zero all",	zero_all },
+	{ "units",		set_axis_half },
+	{ "set value", 	set_axis_value },	
+	{ "bright", 	set_brightness },
+	{ "reverse", 	reverse_axis },	
+	{ "CPI",		set_axis_count },
+	{ "boobies", 	show_values }
+};
+
+typedef enum {
+	button_none			= 0x000,
+	button_x_zero		= 0x001,
+	button_y_zero		= 0x002,
+	button_z_zero		= 0x004,
+	button_w_zero		= 0x008,
+
+	button_x_absinc		= 0x010,
+	button_y_absinc		= 0x020,
+	button_z_absinc		= 0x040,
+	button_w_absinc		= 0x080,
+
+	button_up			= 0x100,
+	button_select		= 0x200,
+	button_down			= 0x400
+} _interface_buttons;
+
+typedef enum {
+	units_inch = 0,
+	units_mm
+} _display_units;
+
+/* Settings that get saved in EEPROM to be restored on restart */
+#define SETTINGS_MAGIC			0xAC
+#define SETTINGS_MAGIC_ADDRESS	0
+#define SETTINGS_EEPROM_ADDRESS	1
+
+#define SETTING_BRIGHT_MASK		0x0F
+
+#define SETTING_X_REVERSE_BIT	0
+#define SETTING_Y_REVERSE_BIT	1
+#define SETTING_Z_REVERSE_BIT	2
+#define SETTING_W_REVERSE_BIT	3
+#define SETTING_S_REVERSE_BIT	4
+
+#define SETTING_UNITS_BIT		0x01
+
+struct _saved_settings {
+	byte	brightness;					// display brightness in lower nybble
+	byte	orientation;				// x x x Rs Rw Rz Ry Rz -- 1=revrse, 0=normal
+	byte	units;						// x x x x x x x m		-- 1=metric, 0=imperial
+	byte	reserved;					// x x x x x x x x 		-- to round out words
+	unsigned int	xCountPerInch;	// number of counts per inch for X axis (2^16)
+	unsigned int	yCountPerInch;	// number of counts per inch for Y axis (2^16)
+	unsigned int	zCountPerInch;	// number of counts per inch for Z axis (2^16)
+	unsigned int	wCountPerInch;	// number of counts per inch for W axis (2^16)
+	unsigned int	sCountPerRevolution;	// number of counts per revolution for spindle (2^16)
+};
+
+struct _saved_settings droSettings;
+
+void resetSettings() {
+	droSettings.brightness = 0x00;
+	droSettings.orientation = 0x00;
+	droSettings.units = 0x00;
+	droSettings.reserved = 0x00;
+	droSettings.xCountPerInch = 0;
+	droSettings.yCountPerInch = 0;
+	droSettings.zCountPerInch = 0;
+	droSettings.wCountPerInch = 0;
+	droSettings.sCountPerRevolution = 0;
+	EEPROM.put(SETTINGS_EEPROM_ADDRESS, droSettings);
+}
+
+void loadSettings() {
+	if (checkSettings()) {
+		EEPROM.get(SETTINGS_EEPROM_ADDRESS, droSettings);
+	} else {
+		resetSettings();
+	}
+}
+
+void saveSettings() {
+	EEPROM.put(SETTINGS_EEPROM_ADDRESS, droSettings);
+}
+
+bool checkSettings() {
+	return EEPROM.read(SETTINGS_MAGIC_ADDRESS) == SETTINGS_MAGIC;
+}
+
+inline int displayBrightness() {
+	return (int)(droSettings.brightness & SETTING_BRIGHT_MASK);
+}
+
+inline void setDisplayBrightness(int bright) {
+	droSettings.brightness = (droSettings.brightness & !SETTING_BRIGHT_MASK) 
+							| (bright & SETTING_BRIGHT_MASK);
+	saveSettings();
+}
+
+inline bool xAxisReversed() {
+	return bitRead(droSettings.orientation, SETTING_X_REVERSE_BIT);
+}
+
+inline void setXAxisReversed(bool reversed) {
+	if (reversed) {
+		bitSet(droSettings.orientation, SETTING_X_REVERSE_BIT);
+	} else {
+		bitClear(droSettings.orientation, SETTING_X_REVERSE_BIT);
+	}
+	
+	saveSettings();
+}
+
+inline bool yAxisReversed() {
+	return bitRead(droSettings.orientation, SETTING_Y_REVERSE_BIT);
+}
+
+inline void setYAxisReversed(bool reversed) {
+	if (reversed) {
+		bitSet(droSettings.orientation, SETTING_Y_REVERSE_BIT);
+	} else {
+		bitClear(droSettings.orientation, SETTING_Y_REVERSE_BIT);
+	}
+	
+	saveSettings();
+}
+
+inline bool zAxisReversed() {
+	return bitRead(droSettings.orientation, SETTING_Z_REVERSE_BIT);
+}
+
+inline void setZAxisReversed(bool reversed) {
+	if (reversed) {
+		bitSet(droSettings.orientation, SETTING_Z_REVERSE_BIT);
+	} else {
+		bitClear(droSettings.orientation, SETTING_Z_REVERSE_BIT);
+	}
+	
+	saveSettings();
+}
+
+inline bool wAxisReversed() {
+	return bitRead(droSettings.orientation, SETTING_W_REVERSE_BIT);
+}
+
+inline void setWAxisReversed(bool reversed) {
+	if (reversed) {
+		bitSet(droSettings.orientation, SETTING_W_REVERSE_BIT);
+	} else {
+		bitClear(droSettings.orientation, SETTING_W_REVERSE_BIT);
+	}
+
+	saveSettings();
+}
+
+_display_units displayUnits() {
+	return bitRead(droSettings.units, SETTING_UNITS_BIT) ? units_inch : units_mm;
+}
+
+void setDisplayUnits(_display_units units) {
+	if (units == units_mm) {
+		bitSet(droSettings.units, SETTING_UNITS_BIT);
+	} else {
+		bitClear(droSettings.units, SETTING_UNITS_BIT);
+	}
+
+	saveSettings();
+}
+
 
 /* === Display DRO === */
 
@@ -829,7 +1010,7 @@ void setup() {
 	SPI.transfer(0x03);
 	W_OUTPUT_PORT |= _BV(W_PIN_BIT);
 #endif
-#endif;
+#endif
 
 #endif
 
@@ -892,7 +1073,7 @@ void setup() {
 	/* === Display DRO === */
 	for (int i = 0; i < DISPLAY_COUNT; i++) {
 		seven_seg.activateAllSegments();
-		seven_seg.setIntensity(displayBrightness);
+		seven_seg.setIntensity(displayBrightness());
 		seven_seg.clearMatrix();
 	}
 
@@ -1039,7 +1220,7 @@ void iFrameFilter() {
 /* return 0x00 = no button, 1=button 1, 2=button 2, 3=button 3... */
 int lastButtonValues[ANALOG_BUTTON_COUNT];
 
-unsigned int debounceButtons() {
+_interface_buttons debounceButtons() {
 	unsigned int buttons = 0x0000;
 
 	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
@@ -1059,7 +1240,7 @@ unsigned int debounceButtons() {
 		lastButtonValues[i] = buttonValue;
 	}
 
-	return buttons;
+	return (_interface_buttons)buttons;
 }
 
 void zeroAllAxes() {
@@ -1079,45 +1260,45 @@ _state operatingState(unsigned int buttons) {
 	}
 
 	switch (buttons) {
-		case 0x000:	// no button press
+		case button_none:	// no button press, ignore
 			break;
 
-		case 0x001:	// X0
+		case button_x_zero:	// X0
 			xZeroSetValue = xReportedValue;
 			xAbsMode = false;
 			break;
 
-		case 0x002:	// Y0
+		case button_y_zero:	// Y0
 			yZeroSetValue = yReportedValue;
 			yAbsMode = false;
 			break;
 
-		case 0x004:	// Z0
+		case button_z_zero:	// Z0
 			zZeroSetValue = zReportedValue;
 			zAbsMode = false;
 			break;
 
-		case 0x010:	// X abs/inc
+		case button_x_absinc:	// X abs/inc
 			xAbsMode = !xAbsMode;
 			break;
 
-		case 0x020:	// Y abs/inc
+		case button_y_absinc:	// Y abs/inc
 			yAbsMode = !yAbsMode;
 			break;
 
-		case 0x040:	// Z abs/inc
+		case button_z_absinc:	// Z abs/inc
 			zAbsMode = !zAbsMode;
 			break;
 
-		case 0x100:	// + set axis to 1/2 aka find center
+		case button_up:	// + set axis to 1/2 aka find center
 			nextState = set_axis_half;
 			break;
 
-		case 0x200: // > show menu
+		case button_select: // > show menu
 			nextState = show_menu;
 			break;
 
-		case 0x400: // - zero all -
+		case button_down: // - zero all -
 			zeroAllAxes();	
 			break;
 
@@ -1139,47 +1320,73 @@ _state setAxisHalfState(unsigned int buttons) {
 	}
 
 	switch (buttons) {
-		case 0x000:	// no button press ignore
+		case button_none:	// no button press, ignore
 			break;
 
-		case 0x001:	// X0
+		case button_x_zero:	// X0
 			xZeroSetValue = (xReportedValue + (xAbsMode ? 0 : xZeroSetValue) ) / 2;
 			xAbsMode = false;
 			nextState = show_values;
 			break;
 
-		case 0x002:	// Y0
+		case button_y_zero:	// Y0
 			yZeroSetValue = (yReportedValue + (yAbsMode ? 0 : yZeroSetValue) ) / 2;
 			yAbsMode = false;
 			nextState = show_values;
 			break;
 
-		case 0x004:	// Z abs/inc
+		case button_z_zero:	// Z abs/inc
 			zZeroSetValue = (zReportedValue + (zAbsMode ? 0 : zZeroSetValue) ) / 2;
 			zAbsMode = false;
 			nextState = show_values;
 			break;
 
-		case 0x010:	// X abs/inc
-		case 0x020:	// Y abs/inc
-		case 0x040:	// Z abs/inc
+		default:	// any other button, cancel
 			nextState = show_values;
 			break;	// cancel and return to operating mode
-
-		case 0x100:	// +
-		case 0x200: // >
-		case 0x400: // -
-			nextState = show_values;
-			break;	// cancel and return to operating mode
-
-		default:	// fall through, invalid or no buttons, ignore
-			break;
 	}
 
 	return nextState;
 }
 
-_state setDisplayBrightness(unsigned int buttons) {
+_state reverseAxisState(unsigned int buttons) {
+	_state nextState = reverse_axis;
+
+	if (lastState != reverse_axis) {	// entering state
+		showMode(MODE_CHAR_SEL, 0);
+		showMode(MODE_CHAR_SEL, 1);
+		showMode(MODE_CHAR_SEL, 2);
+		showMenu("reverse");
+	}
+
+	switch (buttons) {
+		case button_none:	// no button press
+			break;
+
+		case button_x_zero:	// X0
+			setXAxisReversed(!xAxisReversed());
+			nextState = show_values;
+			break;
+
+		case button_y_zero:	// Y0
+			setYAxisReversed(!yAxisReversed());
+			nextState = show_values;
+			break;
+
+		case button_z_zero:	// Z abs/inc
+			setZAxisReversed(!zAxisReversed());
+			nextState = show_values;
+			break;
+
+		default:	// any other button, cancel
+			nextState = show_values;
+			break;	// cancel and return to operating mode
+	}
+
+	return nextState;
+}
+
+_state setDisplayBrightnessState(unsigned int buttons) {
 	_state nextState = set_brightness;
 
 	if (lastState != set_brightness) {	// entering state
@@ -1190,21 +1397,21 @@ _state setDisplayBrightness(unsigned int buttons) {
 	}
 
 	switch (buttons) {
-		case 0x000:	// no button press, ignore
+		case button_none:
 			break;
 
-		case 0x100:	// +
-			displayBrightness = MIN(++displayBrightness, 15);
-			seven_seg.setIntensity(displayBrightness);
+		case button_up:	// +
+			setDisplayBrightness(MIN((displayBrightness() + 1), 15));
+			seven_seg.setIntensity(displayBrightness());
 			break;
 
-		case 0x200: // >
+		case button_select: // >
 			nextState = show_values;
 			break;
 
-		case 0x400:	// -
-			displayBrightness = MAX(--displayBrightness, 0);
-			seven_seg.setIntensity(displayBrightness);
+		case button_down:	// -
+			setDisplayBrightness(MAX((displayBrightness() - 1), 0));
+			seven_seg.setIntensity(displayBrightness());
 			break;
 
 		default:	// fall through, invalid or no buttons, ignore
@@ -1217,35 +1424,22 @@ _state setDisplayBrightness(unsigned int buttons) {
 	return nextState;
 }
 
-typedef struct {
-	const char *title;
-	_state state;
-} _menu;
-
-int menuSelected = 0;
-_menu menu[] = {
-	{ "bright", 	set_brightness },
-	{ "zero", 		zero_all },
-	{ "1-2 axis",	set_axis_half },
-	{ "boobies", 	show_values }
-};
-
-_state showDisplayMenu(unsigned int buttons) {
+_state showDisplayMenuState(unsigned int buttons) {
 	_state nextState = show_menu;
 
 	switch (buttons) {
-		case 0x000:	// no button press, ignore
+		case button_none:	// no button press, ignore
 			break;
 
-		case 0x100:	// +
+		case button_up:	// +
 			menuSelected = MIN(++menuSelected, (sizeof(menu) / sizeof(_menu) - 1));
 			break;
 
-		case 0x200: // >
+		case button_select: // >
 			nextState = menu[menuSelected].state;
 			break;
 
-		case 0x400:	// -
+		case button_down:	// -
 			menuSelected = MAX(--menuSelected, 0);
 			break;
 
@@ -1283,15 +1477,29 @@ bool checkSwitches() {
 				break;
 
 			case show_menu:
-				nextState = showDisplayMenu(buttons);
+				nextState = showDisplayMenuState(buttons);
 				break;
 
 			case set_brightness:
-				nextState = setDisplayBrightness(buttons);
+				nextState = setDisplayBrightnessState(buttons);
 				break;
 
 			case zero_all:
 				zeroAllAxes();	
+				nextState = show_values;
+				break;
+
+			case reverse_axis:
+				nextState = reverseAxisState(buttons);
+				break;
+
+			case set_axis_value:
+				// TODO: Implement set_axis_value state
+				nextState = show_values;
+				break;
+
+			case set_axis_count:
+				// TODO: Implement set_axis_count state
 				nextState = show_values;
 				break;
 
@@ -1302,7 +1510,6 @@ bool checkSwitches() {
 		lastButtons = buttons;
 		updateDisplay = true;	// signal a redraw when button state changes
 	}
-
 
 	if (nextState != currentState) {
 		lastState = currentState;
@@ -1352,8 +1559,7 @@ inline unsigned int readProbeOutputData() {
 #endif
 
 // The loop function is called in an endless loop
-void loop()
-{
+void loop() {
 	if (tickTimerFlag) {
 		tickTimerFlag = false;
 
