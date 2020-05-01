@@ -302,17 +302,21 @@ typedef struct {
 	_state state;
 } _menu;
 
-int menuSelected = 0;
 _menu menu[] = {
-	{ "1-2 axis",	set_axis_half },
 	{ "zero all",	zero_all },
-	{ "units",		set_axis_half },
 	{ "set value", 	set_axis_value },	
-	{ "bright", 	set_brightness },
+	{ "1-2 axis",	set_axis_half },
+	/* non-saved settings above this point */
+	/* Default menuSelected is here! == 2 */
+	/* saved settings below this point */
 	{ "reverse", 	reverse_axis },	
+	{ "units",		set_axis_half },
+	{ "bright", 	set_brightness },
 	{ "CPI",		set_axis_count },
 	{ "boobies", 	show_values }
 };
+
+int menuSelected = 2;
 
 typedef enum {
 	button_none			= 0x000,
@@ -370,11 +374,11 @@ void resetSettings() {
 	droSettings.orientation = 0x00;
 	droSettings.units = 0x00;
 	droSettings.reserved = 0x00;
-	droSettings.xCountPerInch = 0;
-	droSettings.yCountPerInch = 0;
-	droSettings.zCountPerInch = 0;
-	droSettings.wCountPerInch = 0;
-	droSettings.sCountPerRevolution = 0;
+	droSettings.xCountPerInch = 2560;
+	droSettings.yCountPerInch = 2560;
+	droSettings.zCountPerInch = 2560;
+	droSettings.wCountPerInch = 2560;
+	droSettings.sCountPerRevolution = 1;
 	EEPROM.put(SETTINGS_EEPROM_ADDRESS, droSettings);
 }
 
@@ -387,6 +391,7 @@ void loadSettings() {
 }
 
 void saveSettings() {
+	EEPROM.put(SETTINGS_MAGIC_ADDRESS, SETTINGS_MAGIC);
 	EEPROM.put(SETTINGS_EEPROM_ADDRESS, droSettings);
 }
 
@@ -472,6 +477,26 @@ void setDisplayUnits(_display_units units) {
 	}
 
 	saveSettings();
+}
+
+inline int xCountPerInch() {
+	return droSettings.xCountPerInch;
+}
+
+inline int yCountPerInch() {
+	return droSettings.yCountPerInch;
+}
+
+inline int zCountPerInch() {
+	return droSettings.zCountPerInch;
+}
+
+inline int wCountPerInch() {
+	return droSettings.wCountPerInch;
+}
+
+inline int sCountPerRevolution() {
+	return droSettings.sCountPerRevolution;
 }
 
 
@@ -903,6 +928,8 @@ void setup() {
 	tickTimerFlag = false;
 	updateFrequencyCounter = 0;
 
+	loadSettings();
+
 // Initialize DRO values
 #if DRO_ENABLED > 0
 	// use clock only for scale type 0
@@ -1173,17 +1200,16 @@ int formatInteger(long value, int width, char *buffer) {
 	return 1;
 }
 
-void showScaledValue(long value, int displayAddress) {
+void showDoubleValue(double value, int displayAddress) {
 	char buffer[10];
-	double scaledValue = value / SCALE_INCH;
-	if (formatDouble(scaledValue, DISPLAY_WIDTH, DISPLAY_PRECISION, buffer)) {
+	if (formatDouble(value, DISPLAY_WIDTH, DISPLAY_PRECISION, buffer)) {
 		for (int i = 0; i < DISPLAY_WIDTH; i++) {
 			seven_seg.setChar(displayAddress, i, (buffer[i] & 0x7f), (buffer[i] & 0x80));
 		}
 	}
 }
 
-void showRawValue(long value, int displayAddress) {
+void showIntValue(long value, int displayAddress) {
 	char buffer[10];
 	if (formatInteger(value, DISPLAY_WIDTH, buffer)) {
 		for (int i = 0; i < DISPLAY_WIDTH; i++) {
@@ -1389,6 +1415,7 @@ _state reverseAxisState(unsigned int buttons) {
 _state setDisplayBrightnessState(unsigned int buttons) {
 	_state nextState = set_brightness;
 
+	showIntValue(displayBrightness(), 0);
 	if (lastState != set_brightness) {	// entering state
 		showMode(MODE_CHAR_SEL, 0);
 		showMode(MODE_CHAR_SEL, 1);
@@ -1444,6 +1471,16 @@ _state showDisplayMenuState(unsigned int buttons) {
 			break;
 
 		default:	// fall through, invalid or no buttons, ignore
+			// fall through to selected menu state
+			switch (menu[menuSelected].state) {
+				case set_axis_half:
+					nextState = setAxisHalfState(buttons);
+					break;
+
+				case reverse_axis:
+					nextState = reverseAxisState(buttons);
+					break;
+			}
 			break;
 	}
 
@@ -1563,8 +1600,6 @@ void loop() {
 	if (tickTimerFlag) {
 		tickTimerFlag = false;
 
-		// Serial.print(digitalRead(7));
-
 		iFrameFilter();	// slow the dispatch of events for older tablets
 		if (checkSwitches()) {
 			iFrameTrigger = true;
@@ -1584,8 +1619,9 @@ void loop() {
 			Serial.print((long)xReportedValue);
 			Serial.print(F(";"));
 			if (currentState == show_values) {
+				double x = (double)(xReportedValue - (xAbsMode ? 0 : xZeroSetValue)) / xCountPerInch();
 				// TODO: Factor out hardcoded display number for X Axis
-				showScaledValue(xReportedValue - (xAbsMode ? 0 : xZeroSetValue), 0);
+				showDoubleValue((xAxisReversed() ? -x : x), 0);
 				showMode(xAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 0);
 			}
 			xLastReportedValue = xReportedValue;
@@ -1601,8 +1637,9 @@ void loop() {
 			Serial.print((long)yReportedValue);
 			Serial.print(F(";"));
 			if (currentState == show_values) {
+				double y = (double)(yReportedValue - (yAbsMode ? 0 : yZeroSetValue)) / yCountPerInch();
 				// TODO: Factor out hardcoded display number for Y Axis
-				showScaledValue(yReportedValue - (yAbsMode ? 0 : yZeroSetValue), 1);
+				showDoubleValue((yAxisReversed() ? -y : y), 1);
 				showMode(yAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 1);
 			}
 			yLastReportedValue = yReportedValue;
@@ -1618,8 +1655,9 @@ void loop() {
 			Serial.print((long)zReportedValue);
 			Serial.print(F(";"));
 			if (currentState == show_values) {
+				double z = (double)(zReportedValue - (zAbsMode ? 0 : zZeroSetValue)) / zCountPerInch();
 				// TODO: Factor out hardcoded display number for Z Axis
-				showScaledValue(zReportedValue - (zAbsMode ? 0 : zZeroSetValue), 2);
+				showDoubleValue((zAxisReversed() ? -z : z), 2);
 				showMode(zAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 2);
 			}
 			zLastReportedValue = zReportedValue;
@@ -1635,8 +1673,9 @@ void loop() {
 			Serial.print((long)wReportedValue);
 			Serial.print(F(";"));
 			if (currentState == show_values) {
+				double w = (double)(wReportedValue - (wAbsMode ? 0 : wZeroSetValue)) / wCountPerInch();
 				// TODO: Factor out hardcoded display number for W Axis
-				showScaledValue(wReportedValue - (wAbsMode ? 0 : wZeroSetValue), 3);
+				showDoubleValue((wAxisReversed() ? -w : w), 3);
 				showMode(wAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 3);
 			}
 			wLastReportedValue = wReportedValue;
@@ -1670,7 +1709,7 @@ void loop() {
 				Serial.print(F(";"));
 				if (currentState == show_values) {
 					// TODO: Factor out hardcoded display number for RPM
-					showRawValue(tachReadoutRpm, 3);
+					showIntValue(tachReadoutRpm, 3);
 				}
 				lastTachReadoutRpm = tachReadoutRpm;
 			}
@@ -1722,7 +1761,6 @@ void setupClkTimer() {
 }
 
 
-
 /* Interrupt Service Routines */
 
 // Timer 2 interrupt B ( Switches clock pin from low to high 21 times) at the end of clock counter limit
@@ -1737,7 +1775,6 @@ ISR(TIMER2_COMPB_vect) {
 	}
 #endif
 }
-
 
 // Timer 2 interrupt A ( Switches clock pin from high to low) at the end of clock PWM Duty counter limit
 ISR(TIMER2_COMPA_vect)  {
