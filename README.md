@@ -110,6 +110,7 @@ as described above.
 
 ## Ideas
 
+- use 'long-press' in some way to get more 'buttons'
 - axis should blink when setting values / changing numbers
 
 - use rotary encoder to change numbers
