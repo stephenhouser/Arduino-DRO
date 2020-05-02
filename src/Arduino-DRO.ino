@@ -1500,6 +1500,8 @@ bool checkSwitches() {
 	bool updateDisplay = false;
 	_state nextState = currentState;
 
+	// TODO: Implement 15 second menu timeout and return to operating mode
+	
 	if (millis() - lastButtonTime < ANALOG_IGNORE_TIME) {
 		return false;
 	}
