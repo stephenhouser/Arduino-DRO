@@ -263,6 +263,12 @@
 
 #define IFRAME_TIMEDELAY 		(5 * 1000)	/* ms */
 
+// LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT, false);
+LedController seven_seg = LedController(11, 13, 10, DISPLAY_COUNT, true);
+
+bool iFrameTrigger = false;		// Should we force a display and data update?
+unsigned long iFrameLastTime = 0L;		// The last time we forced a data push to serial
+
 // TODO: Factor out Switch Ports to a #define 
 #define ANALOG_BUTTON_COUNT		3
 
@@ -272,26 +278,44 @@
 #define ANALOG_MED_SW_LEVEL		515
 #define ANALOG_LOW_SW_LEVEL		170
 
-// LedController seven_seg = LedController(12, 11, 10, DISPLAY_COUNT, false);
-LedController seven_seg = LedController(11, 13, 10, DISPLAY_COUNT, true);
+typedef enum {
+	button_none			= 0x000,
+	button_x_zero		= 0x001,
+	button_y_zero		= 0x002,
+	button_z_zero		= 0x004,
+	button_w_zero		= 0x008,
 
-bool iFrameTrigger = false;		// Should we force a display and data update?
-unsigned long iFrameLastTime = 0L;		// The last time we forced a data push to serial
+	button_x_absinc		= 0x010,
+	button_y_absinc		= 0x020,
+	button_z_absinc		= 0x040,
+	button_w_absinc		= 0x080,
+
+	button_up			= 0x100,
+	button_select		= 0x200,
+	button_down			= 0x400
+} _interface_buttons;
+
+#define SUBMODE_TIMEOUT	(15 * 1000)		// 15 seconds
+#define BLINK_TIME		(250)			// millis
 
 int buttonInputPins[ANALOG_BUTTON_COUNT] = { A0, A1, A2 };	// Pins to configure as analog decoded button inputs
-unsigned int lastButtons = 0;	// The last button set we saw. To keep from repeating ourselves
+_interface_buttons lastButtons = 0;	// The last button set we saw. To keep from repeating ourselves
 unsigned long lastButtonTime = 0L;
 
 typedef enum {			// state machine for UI and operations
 	invalid_state = 0,	// unset state.
-	show_values,		// normal operating mode
+	show_values,			// normal operating mode
 	show_menu,			// show the config menu (> when in show_values)
-	set_axis_half,		// setting an axis to 1/2 value, select axis (+ when in show_values)
-	zero_all,			// zero all axes (- when in show_values)
+
+	set_axis_count,		// set the counts per inch for axis
 	set_brightness,		// setting brightness
-	set_axis_value,		// set axis to a specific value
+	set_precision,		// set the display precision (number of decimal places)
+	set_units,			// set the display units (inch or mm)
 	reverse_axis,		// reverse axis orientation (+/-)
-	set_axis_count,	// set the counts per inch for axis
+
+	set_axis_half,		// setting an axis to 1/2 value, select axis (+ when in show_values)
+	set_axis_value,		// set axis to a specific value
+	zero_all,			// zero all axes (- when in show_values)
 } _state;
 
 _state lastState;
@@ -313,6 +337,7 @@ _menu menu[] = {
 	{ " hell ", 	show_values },
 	{ "CPI",		set_axis_count },
 	{ "bright", 	set_brightness },
+	{ "digits",		set_precision },
 	{ "units",		set_axis_half },
 	{ "reverse", 	reverse_axis },	
 	/* saved settings above this point, UP to get to them */
@@ -327,47 +352,29 @@ _menu menu[] = {
 int menuSelected = 5;
 
 typedef enum {
-	button_none			= 0x000,
-	button_x_zero		= 0x001,
-	button_y_zero		= 0x002,
-	button_z_zero		= 0x004,
-	button_w_zero		= 0x008,
-
-	button_x_absinc		= 0x010,
-	button_y_absinc		= 0x020,
-	button_z_absinc		= 0x040,
-	button_w_absinc		= 0x080,
-
-	button_up			= 0x100,
-	button_select		= 0x200,
-	button_down			= 0x400
-} _interface_buttons;
-
-typedef enum {
 	units_inch = 0,
 	units_mm
 } _display_units;
 
 /* Settings that get saved in EEPROM to be restored on restart */
-#define SETTINGS_MAGIC			0xAC
+#define SETTINGS_MAGIC_VERSION	0x02
 #define SETTINGS_MAGIC_ADDRESS	0
 #define SETTINGS_EEPROM_ADDRESS	1
 
-#define SETTING_BRIGHT_MASK		0x0F
+#define SETTINGS_BRIGHT_MASK	0x0F
+#define SETTINGS_PRECISION_MASK	0xF0
 
-#define SETTING_X_REVERSE_BIT	0
-#define SETTING_Y_REVERSE_BIT	1
-#define SETTING_Z_REVERSE_BIT	2
-#define SETTING_W_REVERSE_BIT	3
-#define SETTING_S_REVERSE_BIT	4
-
-#define SETTING_UNITS_BIT		0x01
+#define SETTINGS_X_BIT	0
+#define SETTINGS_Y_BIT	1
+#define SETTINGS_Z_BIT	2
+#define SETTINGS_W_BIT	3
+#define SETTINGS_S_BIT	4
 
 struct _saved_settings {
-	byte	brightness;					// display brightness in lower nybble
-	byte	orientation;				// x x x Rs Rw Rz Ry Rz -- 1=revrse, 0=normal
-	byte	units;						// x x x x x x x m		-- 1=metric, 0=imperial
-	byte	reserved;					// x x x x x x x x 		-- to round out words
+	byte	precision_brightness;	// brightness in lower nybble, precision in upper (0-15)
+	byte	axis_enabled;			// x x x S  W Z Y X -- 1 enabled, 0-disabled
+	byte	orientation;			// x x x S  W Z Y X -- 1=revrse, 0=normal
+	byte	units;					// x x x S  W Z Y X -- 1=metric, 0=imperial
 	unsigned int	xCountPerInch;	// number of counts per inch for X axis (2^16)
 	unsigned int	yCountPerInch;	// number of counts per inch for Y axis (2^16)
 	unsigned int	zCountPerInch;	// number of counts per inch for Z axis (2^16)
@@ -378,15 +385,15 @@ struct _saved_settings {
 struct _saved_settings droSettings;
 
 void resetSettings() {
-	droSettings.brightness = 0x00;
-	droSettings.orientation = 0x00;
-	droSettings.units = 0x00;
-	droSettings.reserved = 0x00;
-	droSettings.xCountPerInch = 2560;
-	droSettings.yCountPerInch = 2560;
-	droSettings.zCountPerInch = 2560;
-	droSettings.wCountPerInch = 2560;
-	droSettings.sCountPerRevolution = 1;
+	droSettings.precision_brightness = 0x33;	// precision -4, brightness 3
+	droSettings.axis_enabled = 0x17;			// Spindle, Z, Y, and X enabled
+	droSettings.orientation = 0x00;				// All oriented to whatever scale reads
+	droSettings.units = 0x00;					// All using inches
+	droSettings.xCountPerInch = 2560;			// default for iGaging EZView scale
+	droSettings.yCountPerInch = 2560;			// default for iGaging EZView scale
+	droSettings.zCountPerInch = 2560;			// default for iGaging EZView scale
+	droSettings.wCountPerInch = 2560;			// default for iGaging EZView scale
+	droSettings.sCountPerRevolution = 1;		// default for iGaging EZView scale
 	EEPROM.put(SETTINGS_EEPROM_ADDRESS, droSettings);
 }
 
@@ -399,89 +406,101 @@ void loadSettings() {
 }
 
 void saveSettings() {
-	EEPROM.put(SETTINGS_MAGIC_ADDRESS, SETTINGS_MAGIC);
+	EEPROM.put(SETTINGS_MAGIC_ADDRESS, SETTINGS_MAGIC_VERSION);
 	EEPROM.put(SETTINGS_EEPROM_ADDRESS, droSettings);
 }
 
 bool checkSettings() {
-	return EEPROM.read(SETTINGS_MAGIC_ADDRESS) == SETTINGS_MAGIC;
+	return EEPROM.read(SETTINGS_MAGIC_ADDRESS) == SETTINGS_MAGIC_VERSION;
 }
 
 inline int displayBrightness() {
-	return (int)(droSettings.brightness & SETTING_BRIGHT_MASK);
+	return droSettings.precision_brightness & SETTINGS_BRIGHT_MASK;
 }
 
 inline void setDisplayBrightness(int bright) {
-	droSettings.brightness = (droSettings.brightness & !SETTING_BRIGHT_MASK) 
-							| (bright & SETTING_BRIGHT_MASK);
+	droSettings.precision_brightness = (droSettings.precision_brightness & ~SETTINGS_BRIGHT_MASK) 
+										| (bright & SETTINGS_BRIGHT_MASK);
 	saveSettings();
 }
 
+inline int displayPrecision() {
+	 // bias is 8 for negative numbers
+	return ((droSettings.precision_brightness >> 4) & 0x0F) - 8;
+}
+
+inline void setDisplayPrecision(int precision) {
+	droSettings.precision_brightness = (droSettings.precision_brightness & ~SETTINGS_PRECISION_MASK) 
+										| (((precision + 8) << 4) & SETTINGS_PRECISION_MASK);
+	saveSettings();
+}
 inline bool xAxisReversed() {
-	return bitRead(droSettings.orientation, SETTING_X_REVERSE_BIT);
+	return bitRead(droSettings.orientation, SETTINGS_X_BIT);
 }
 
 inline void setXAxisReversed(bool reversed) {
 	if (reversed) {
-		bitSet(droSettings.orientation, SETTING_X_REVERSE_BIT);
+		bitSet(droSettings.orientation, SETTINGS_X_BIT);
 	} else {
-		bitClear(droSettings.orientation, SETTING_X_REVERSE_BIT);
+		bitClear(droSettings.orientation, SETTINGS_X_BIT);
 	}
 	
 	saveSettings();
 }
 
 inline bool yAxisReversed() {
-	return bitRead(droSettings.orientation, SETTING_Y_REVERSE_BIT);
+	return bitRead(droSettings.orientation, SETTINGS_Y_BIT);
 }
 
 inline void setYAxisReversed(bool reversed) {
 	if (reversed) {
-		bitSet(droSettings.orientation, SETTING_Y_REVERSE_BIT);
+		bitSet(droSettings.orientation, SETTINGS_Y_BIT);
 	} else {
-		bitClear(droSettings.orientation, SETTING_Y_REVERSE_BIT);
+		bitClear(droSettings.orientation, SETTINGS_Y_BIT);
 	}
 	
 	saveSettings();
 }
 
 inline bool zAxisReversed() {
-	return bitRead(droSettings.orientation, SETTING_Z_REVERSE_BIT);
+	return bitRead(droSettings.orientation, SETTINGS_Z_BIT);
 }
 
 inline void setZAxisReversed(bool reversed) {
 	if (reversed) {
-		bitSet(droSettings.orientation, SETTING_Z_REVERSE_BIT);
+		bitSet(droSettings.orientation, SETTINGS_Z_BIT);
 	} else {
-		bitClear(droSettings.orientation, SETTING_Z_REVERSE_BIT);
+		bitClear(droSettings.orientation, SETTINGS_Z_BIT);
 	}
 	
 	saveSettings();
 }
 
 inline bool wAxisReversed() {
-	return bitRead(droSettings.orientation, SETTING_W_REVERSE_BIT);
+	return bitRead(droSettings.orientation, SETTINGS_W_BIT);
 }
 
 inline void setWAxisReversed(bool reversed) {
 	if (reversed) {
-		bitSet(droSettings.orientation, SETTING_W_REVERSE_BIT);
+		bitSet(droSettings.orientation, SETTINGS_W_BIT);
 	} else {
-		bitClear(droSettings.orientation, SETTING_W_REVERSE_BIT);
+		bitClear(droSettings.orientation, SETTINGS_W_BIT);
 	}
 
 	saveSettings();
 }
 
 _display_units displayUnits() {
-	return bitRead(droSettings.units, SETTING_UNITS_BIT) ? units_inch : units_mm;
+	// TODO: Allow independently settable units rather than just using the X for them all.
+	return bitRead(droSettings.units, SETTINGS_X_BIT) ? units_inch : units_mm;
 }
 
 void setDisplayUnits(_display_units units) {
+	// TODO: Allow independently settable units rather than just using the X for them all.
 	if (units == units_mm) {
-		bitSet(droSettings.units, SETTING_UNITS_BIT);
+		bitSet(droSettings.units, SETTINGS_X_BIT);
 	} else {
-		bitClear(droSettings.units, SETTING_UNITS_BIT);
+		bitClear(droSettings.units, SETTINGS_X_BIT);
 	}
 
 	saveSettings();
@@ -509,7 +528,6 @@ inline int sCountPerRevolution() {
 
 
 /* === Display DRO === */
-
 
 // DRO config (if axis is not connected change in the corresponding constant value from "1" to "0")
 #define SCALE_X_ENABLED 1
@@ -1144,7 +1162,7 @@ void setup() {
  */
 int formatDouble(double value, int width, int precision, char *buffer) {
 	if (abs(precision) > width) {
-		Serial.print("precision > width\n");
+		Serial.print("precision > width ");
 		return 0;
 	}
 
@@ -1210,7 +1228,7 @@ int formatInteger(long value, int width, char *buffer) {
 
 void showDoubleValue(double value, int displayAddress) {
 	char buffer[10];
-	if (formatDouble(value, DISPLAY_WIDTH, DISPLAY_PRECISION, buffer)) {
+	if (formatDouble(value, DISPLAY_WIDTH, displayPrecision(), buffer)) {
 		for (int i = 0; i < DISPLAY_WIDTH; i++) {
 			seven_seg.setChar(displayAddress, i, (buffer[i] & 0x7f), (buffer[i] & 0x80));
 		}
@@ -1257,6 +1275,11 @@ int lastButtonValues[ANALOG_BUTTON_COUNT];
 _interface_buttons debounceButtons() {
 	unsigned int buttons = 0x0000;
 
+	// // Hacky-debouncing in addition to the below debounce...	
+	// if (millis() - lastButtonTime < ANALOG_IGNORE_TIME) {
+	// 	return lastButtons;
+	// }
+
 	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
 		int buttonValue = analogRead(buttonInputPins[i]);
 
@@ -1286,11 +1309,11 @@ void zeroAllAxes() {
 	zAbsMode = false;		
 }
 
-_state operatingState(unsigned int buttons) {
+_state operatingState(_interface_buttons buttons) {
 	_state nextState = show_values;
 
 	if (lastState != show_values) {		// enter state
-		showMenu("        ");
+		showMenu("--------");
 	}
 
 	switch (buttons) {
@@ -1343,7 +1366,7 @@ _state operatingState(unsigned int buttons) {
 	return nextState;
 }
 
-_state setAxisHalfState(unsigned int buttons) {
+_state setAxisHalfState(_interface_buttons buttons) {
 	_state nextState = set_axis_half;
 
 	if (lastState != set_axis_half) {	// entering state
@@ -1383,7 +1406,7 @@ _state setAxisHalfState(unsigned int buttons) {
 	return nextState;
 }
 
-_state reverseAxisState(unsigned int buttons) {
+_state reverseAxisState(_interface_buttons buttons) {
 	_state nextState = reverse_axis;
 
 	if (lastState != reverse_axis) {	// entering state
@@ -1420,7 +1443,7 @@ _state reverseAxisState(unsigned int buttons) {
 	return nextState;
 }
 
-_state setDisplayBrightnessState(unsigned int buttons) {
+_state setDisplayBrightnessState(_interface_buttons buttons) {
 	_state nextState = set_brightness;
 
 	showIntValue(displayBrightness(), 0);
@@ -1459,7 +1482,55 @@ _state setDisplayBrightnessState(unsigned int buttons) {
 	return nextState;
 }
 
-_state showDisplayMenuState(unsigned int buttons) {
+_state setDisplayPrecisionState(_interface_buttons buttons) {
+	_state nextState = set_precision;
+
+	if (lastState != set_precision) {	// entering state
+		showMenu(" +up -dn");
+	}
+
+	switch (buttons) {
+		case button_none:
+			break;
+
+		case button_up:	// +
+			setDisplayPrecision(MIN(displayPrecision() + 1, 7));
+			break;
+
+		case button_select: // >
+			nextState = show_values;
+			break;
+
+		case button_down:	// -
+			setDisplayPrecision(MAX(displayPrecision() - 1, -7));
+			break;
+
+		default:	// fall through, invalid or no buttons, ignore
+			break;
+	}
+
+	return nextState;
+}
+
+_state setAxisCPIState(_interface_buttons buttons) {
+	_state nextState = show_values;
+
+	return nextState;
+}
+
+_state setAxisValueState(_interface_buttons buttons) {
+	_state nextState = show_values;
+
+	return nextState;
+}
+
+_state setUnitsState(_interface_buttons buttons) {
+	_state nextState = show_values;
+
+	return nextState;
+}
+
+_state showDisplayMenuState(_interface_buttons buttons) {
 	_state nextState = show_menu;
 
 	switch (buttons) {
@@ -1496,17 +1567,78 @@ _state showDisplayMenuState(unsigned int buttons) {
 	return nextState;
 }
 
+void showState(_state state) {
+	switch (state) {
+		case invalid_state:
+			Serial.print("Sinvalid;");
+			break;
+
+		case show_values:
+			Serial.print("Sshow_values;");
+			break;
+		case show_menu:
+			Serial.print("Sshow_menu;");
+			break;
+
+		case set_axis_count:
+			Serial.print("Sset_axis_count;");
+			break;
+
+		case set_brightness:
+			Serial.print("Sset_brightness;");
+			break;
+
+		case set_precision:
+			Serial.print("Sset_precision;");
+			break;
+
+		case set_units:
+			Serial.print("Sset_units;");
+			break;
+
+		case reverse_axis:
+			Serial.print("Sreverse_axis;");
+			break;
+
+		case set_axis_half:
+			Serial.print("Sset_axis_half;");
+			break;
+
+		case set_axis_value:
+			Serial.print("Sset_axis_value;");
+			break;
+
+		case zero_all:
+			Serial.print("Szero_all;");
+			break;
+
+		default:
+			Serial.print("Sunknown;");
+			break;
+	}
+}
+
 bool checkSwitches() {
 	bool updateDisplay = false;
 	_state nextState = currentState;
 
-	// TODO: Implement 15 second menu timeout and return to operating mode
-	
+	// if (currentState != lastState) {
+	// 	showState(currentState);
+	// }
+
+	// Hacky-debouncing in addition to the below debounce...	
 	if (millis() - lastButtonTime < ANALOG_IGNORE_TIME) {
 		return false;
 	}
 
-	unsigned int buttons = debounceButtons();
+	_interface_buttons buttons = debounceButtons();
+
+	// // TODO: Implement 15 second menu timeout and return to operating mode
+	// if (buttons == button_none && currentState != show_values && (millis() - lastButtonTime) > SUBMODE_TIMEOUT) {
+	// 	nextState = show_values;
+	// 	// Serial.println("timeout");
+	// }
+
 	if (buttons != lastButtons) {
 		if (buttons != 0) {
 			Serial.print("B");
@@ -1542,11 +1674,21 @@ bool checkSwitches() {
 
 			case set_axis_value:
 				// TODO: Implement set_axis_value state
-				nextState = show_values;
+				nextState = setAxisValueState(buttons);
 				break;
 
 			case set_axis_count:
 				// TODO: Implement set_axis_count state
+				nextState = setAxisCPIState(buttons);
+				break;
+
+			case set_precision:
+				// TODO: Implement set_precision state
+				nextState = setDisplayPrecisionState(buttons);
+				break;
+
+			case set_units:
+				// TODO: Implement set_units state
 				nextState = show_values;
 				break;
 
@@ -1558,8 +1700,8 @@ bool checkSwitches() {
 		updateDisplay = true;	// signal a redraw when button state changes
 	}
 
+	lastState = currentState;
 	if (nextState != currentState) {
-		lastState = currentState;
 		currentState = nextState;
 
 		Serial.print("S");
@@ -1605,6 +1747,10 @@ inline unsigned int readProbeOutputData() {
 }
 #endif
 
+bool isValueState(_state state) {
+	return (state == show_values) || (state = set_precision);
+}
+
 // The loop function is called in an endless loop
 void loop() {
 	if (tickTimerFlag) {
@@ -1628,7 +1774,7 @@ void loop() {
 			Serial.print(F("X"));
 			Serial.print((long)xReportedValue);
 			Serial.print(F(";"));
-			if (currentState == show_values) {
+			if (isValueState(currentState)) {
 				double x = (double)(xReportedValue - (xAbsMode ? 0 : xZeroSetValue)) / xCountPerInch();
 				// TODO: Factor out hardcoded display number for X Axis
 				showDoubleValue((xAxisReversed() ? -x : x), 0);
@@ -1646,7 +1792,7 @@ void loop() {
 			Serial.print(F("Y"));
 			Serial.print((long)yReportedValue);
 			Serial.print(F(";"));
-			if (currentState == show_values) {
+			if (isValueState(currentState)) {
 				double y = (double)(yReportedValue - (yAbsMode ? 0 : yZeroSetValue)) / yCountPerInch();
 				// TODO: Factor out hardcoded display number for Y Axis
 				showDoubleValue((yAxisReversed() ? -y : y), 1);
@@ -1664,7 +1810,7 @@ void loop() {
 			Serial.print(F("Z"));
 			Serial.print((long)zReportedValue);
 			Serial.print(F(";"));
-			if (currentState == show_values) {
+			if (isValueState(currentState)) {
 				double z = (double)(zReportedValue - (zAbsMode ? 0 : zZeroSetValue)) / zCountPerInch();
 				// TODO: Factor out hardcoded display number for Z Axis
 				showDoubleValue((zAxisReversed() ? -z : z), 2);
@@ -1682,7 +1828,7 @@ void loop() {
 			Serial.print(F("W"));
 			Serial.print((long)wReportedValue);
 			Serial.print(F(";"));
-			if (currentState == show_values) {
+			if (isValueState(currentState)) {
 				double w = (double)(wReportedValue - (wAbsMode ? 0 : wZeroSetValue)) / wCountPerInch();
 				// TODO: Factor out hardcoded display number for W Axis
 				showDoubleValue((wAxisReversed() ? -w : w), 3);
@@ -1717,7 +1863,7 @@ void loop() {
 				Serial.print((unsigned long)tachReadoutRpm);
 #endif
 				Serial.print(F(";"));
-				if (currentState == show_values) {
+				if (isValueState(currentState) && currentState != set_precision) {
 					// TODO: Factor out hardcoded display number for RPM
 					showIntValue(tachReadoutRpm, 3);
 				}
