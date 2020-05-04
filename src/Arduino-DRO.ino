@@ -434,60 +434,113 @@ inline void setDisplayPrecision(int precision) {
 										| (((precision + 8) << 4) & SETTINGS_PRECISION_MASK);
 	saveSettings();
 }
+
+inline bool axisEnabled(unsigned int axisBit) {
+	return bitRead(droSettings.axis_enabled, axisBit);
+}
+
+inline void setAxisEnabled(bool enabled, unsigned int axisBit) {
+	if (enabled) {
+		bitSet(droSettings.axis_enabled, axisBit);
+	} else {
+		bitClear(droSettings.axis_enabled, axisBit);
+	}
+	
+	saveSettings();
+}
+
+inline bool xAxisEnabled() {
+	return axisEnabled(SETTINGS_X_BIT);
+}
+
+inline void setXAxisEnabled(bool enabled) {
+	setAxisEnabled(enabled, SETTINGS_X_BIT);
+}
+
+inline bool yAxisEnabled() {
+	return axisEnabled(SETTINGS_Y_BIT);
+}
+
+inline void setYAxisEnabled(bool enabled) {
+	setAxisEnabled(enabled, SETTINGS_Y_BIT);
+}
+
+inline bool zAxisEnabled() {
+	return axisEnabled(SETTINGS_Z_BIT);
+}
+
+inline void setZAxisEnabled(bool enabled) {
+	setAxisEnabled(enabled, SETTINGS_Z_BIT);
+}
+
+inline bool wAxisEnabled() {
+	return axisEnabled(SETTINGS_W_BIT);
+}
+
+inline void setWAxisEnabled(bool enabled) {
+	setAxisEnabled(enabled, SETTINGS_W_BIT);
+}
+
+inline bool sAxisEnabled() {
+	return axisEnabled(SETTINGS_S_BIT);
+}
+
+inline void setSAxisEnabled(bool enabled) {
+	setAxisEnabled(enabled, SETTINGS_S_BIT);
+}
+
+inline bool axisReversed(unsigned int axisBit) {
+	return bitRead(droSettings.orientation, axisBit);
+}
+
+inline void setAxisReversed(bool reversed, unsigned int axisBit) {
+	if (reversed) {
+		bitSet(droSettings.orientation, axisBit);
+	} else {
+		bitClear(droSettings.orientation, axisBit);
+	}
+	
+	saveSettings();
+}
+
 inline bool xAxisReversed() {
-	return bitRead(droSettings.orientation, SETTINGS_X_BIT);
+	return axisReversed(SETTINGS_X_BIT);
 }
 
 inline void setXAxisReversed(bool reversed) {
-	if (reversed) {
-		bitSet(droSettings.orientation, SETTINGS_X_BIT);
-	} else {
-		bitClear(droSettings.orientation, SETTINGS_X_BIT);
-	}
-	
-	saveSettings();
+	setAxisReversed(reverse_axis, SETTINGS_X_BIT);
 }
 
 inline bool yAxisReversed() {
-	return bitRead(droSettings.orientation, SETTINGS_Y_BIT);
+	return axisReversed(SETTINGS_Y_BIT);
 }
 
 inline void setYAxisReversed(bool reversed) {
-	if (reversed) {
-		bitSet(droSettings.orientation, SETTINGS_Y_BIT);
-	} else {
-		bitClear(droSettings.orientation, SETTINGS_Y_BIT);
-	}
-	
-	saveSettings();
+	setAxisReversed(reverse_axis, SETTINGS_Y_BIT);
 }
 
 inline bool zAxisReversed() {
-	return bitRead(droSettings.orientation, SETTINGS_Z_BIT);
+	return axisReversed(SETTINGS_Z_BIT);
 }
 
 inline void setZAxisReversed(bool reversed) {
-	if (reversed) {
-		bitSet(droSettings.orientation, SETTINGS_Z_BIT);
-	} else {
-		bitClear(droSettings.orientation, SETTINGS_Z_BIT);
-	}
-	
-	saveSettings();
+	setAxisReversed(reverse_axis, SETTINGS_Z_BIT);
 }
 
 inline bool wAxisReversed() {
-	return bitRead(droSettings.orientation, SETTINGS_W_BIT);
+	return axisReversed(SETTINGS_W_BIT);
 }
 
 inline void setWAxisReversed(bool reversed) {
-	if (reversed) {
-		bitSet(droSettings.orientation, SETTINGS_W_BIT);
-	} else {
-		bitClear(droSettings.orientation, SETTINGS_W_BIT);
-	}
+	setAxisReversed(reverse_axis, SETTINGS_W_BIT);
+}
 
-	saveSettings();
+inline bool sAxisReversed() {
+	return axisReversed(SETTINGS_S_BIT);
+}
+
+inline void setSAxisReversed(bool reversed) {
+	setAxisReversed(reverse_axis, SETTINGS_S_BIT);
 }
 
 _display_units displayUnits() {
@@ -612,7 +665,6 @@ inline int sCountPerRevolution() {
 /* weighted average constants */ 
 #define FILTER_SLOW_EMA AXIS_AVERAGE_COUNT	// Slow movement EMA
 #define FILTER_FAST_EMA 2 					// Fast movement EMA
-
 
 #if (SCALE_X_ENABLED > 0) || (SCALE_Y_ENABLED > 0) || (SCALE_Z_ENABLED > 0) || (SCALE_W_ENABLED > 0)
 #define DRO_ENABLED 1
