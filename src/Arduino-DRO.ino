@@ -508,7 +508,7 @@ inline bool xAxisReversed() {
 }
 
 inline void setXAxisReversed(bool reversed) {
-	setAxisReversed(reverse_axis, SETTINGS_X_BIT);
+	setAxisReversed(reversed, SETTINGS_X_BIT);
 }
 
 inline bool yAxisReversed() {
@@ -516,7 +516,7 @@ inline bool yAxisReversed() {
 }
 
 inline void setYAxisReversed(bool reversed) {
-	setAxisReversed(reverse_axis, SETTINGS_Y_BIT);
+	setAxisReversed(reversed, SETTINGS_Y_BIT);
 }
 
 inline bool zAxisReversed() {
@@ -524,7 +524,7 @@ inline bool zAxisReversed() {
 }
 
 inline void setZAxisReversed(bool reversed) {
-	setAxisReversed(reverse_axis, SETTINGS_Z_BIT);
+	setAxisReversed(reversed, SETTINGS_Z_BIT);
 }
 
 inline bool wAxisReversed() {
@@ -532,7 +532,7 @@ inline bool wAxisReversed() {
 }
 
 inline void setWAxisReversed(bool reversed) {
-	setAxisReversed(reverse_axis, SETTINGS_W_BIT);
+	setAxisReversed(reversed, SETTINGS_W_BIT);
 }
 
 inline bool sAxisReversed() {
@@ -540,7 +540,7 @@ inline bool sAxisReversed() {
 }
 
 inline void setSAxisReversed(bool reversed) {
-	setAxisReversed(reverse_axis, SETTINGS_S_BIT);
+	setAxisReversed(reversed, SETTINGS_S_BIT);
 }
 
 _display_units displayUnits() {
@@ -1327,22 +1327,14 @@ int lastButtonValues[ANALOG_BUTTON_COUNT];
 _interface_buttons debounceButtons() {
 	unsigned int buttons = 0x0000;
 
-	// // Hacky-debouncing in addition to the below debounce...	
-	// if (millis() - lastButtonTime < ANALOG_IGNORE_TIME) {
-	// 	return lastButtons;
-	// }
-
 	for (int i = 0; i < ANALOG_BUTTON_COUNT; i++) {
 		int buttonValue = analogRead(buttonInputPins[i]);
 
 		if (lastButtonValues[i] < ANALOG_LOW_SW_LEVEL && buttonValue < ANALOG_LOW_SW_LEVEL) {
-			// Serial.println(buttonValue);
 			buttons |= 0x01 << (i * 4);
 		} else if (lastButtonValues[i] < ANALOG_MED_SW_LEVEL && buttonValue < ANALOG_MED_SW_LEVEL) {
-			// Serial.println(buttonValue);
 			buttons |= 0x02 << (i * 4);
 		} else if (lastButtonValues[i] < ANALOG_HIGH_SW_LEVEL && buttonValue < ANALOG_HIGH_SW_LEVEL) {
-			// Serial.println(buttonValue);
 			buttons |= 0x04 << (i * 4);
 		}
 
@@ -1674,14 +1666,10 @@ bool checkSwitches() {
 	bool updateDisplay = false;
 	_state nextState = currentState;
 
-	// if (currentState != lastState) {
-	// 	showState(currentState);
+	// // Hacky-debouncing in addition to the below debounce...	
+	// if (millis() - lastButtonTime < ANALOG_IGNORE_TIME) {
+	// 	return false;
 	// }
-
-	// Hacky-debouncing in addition to the below debounce...	
-	if (millis() - lastButtonTime < ANALOG_IGNORE_TIME) {
-		return false;
-	}
 
 	_interface_buttons buttons = debounceButtons();
 
@@ -1690,6 +1678,10 @@ bool checkSwitches() {
 	// 	nextState = show_values;
 	// 	// Serial.println("timeout");
 	// }
+	if (buttons == lastButtons) {
+		return false;
+	}
+
 
 	if (buttons != lastButtons) {
 		if (buttons != 0) {
@@ -1748,17 +1740,19 @@ bool checkSwitches() {
 				break;			
 		}
 
-		lastButtons = buttons;
 		updateDisplay = true;	// signal a redraw when button state changes
 	}
 
+	lastButtons = buttons;
 	lastState = currentState;
+
+	// Advance the state and return...
 	if (nextState != currentState) {
 		currentState = nextState;
 
-		Serial.print("S");
-		Serial.print(currentState);
-		Serial.print(";");
+		// Serial.print("S");
+		// Serial.print(currentState);
+		// Serial.print(";");
 
 		updateDisplay = true;	// signal a redraw when state changes
 	}
@@ -1800,7 +1794,7 @@ inline unsigned int readProbeOutputData() {
 #endif
 
 bool isValueState(_state state) {
-	return (state == show_values) || (state = set_precision);
+	return (state == show_values) || (state == set_precision);
 }
 
 // The loop function is called in an endless loop
