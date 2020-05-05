@@ -2089,7 +2089,6 @@ ISR(TIMER2_COMPA_vect)  {
 			wValue >>= 1;
 #endif
 
-
 		} else if (updateFrequencyCounter == SCALE_CLK_PULSES - 1) {
 
 			//If 21-st bit is 'HIGH' inverse the sign of the axis readout
@@ -2122,7 +2121,6 @@ ISR(TIMER2_COMPA_vect)  {
 #endif
 			// Tell the main loop, that it's time to sent data
 			tickTimerFlag = true;
-
 		}
 	}
 #else
