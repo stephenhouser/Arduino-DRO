@@ -247,16 +247,20 @@
  * pin 11 is connected to the CLK 
  * pin 10 is connected to LOAD 
  */
-
 #define DISPLAY_COUNT			4
 #define DISPLAY_WIDTH			9	// one extra to account for the decimal point 
-#define DISPLAY_PRECISION		-4	// number of digits after '.'. Negative means round last to 0/5 
 
-#define DISPLAY_MENU_ADDRESS	3
 
 #define MODE_CHAR_ABS	'A'
 #define MODE_CHAR_INC	' '
 #define MODE_CHAR_SEL	'-'
+
+#define DISPLAY_MENU_ADDRESS	3
+#define DISPLAY_X_AXIS_ADDRESS	0
+#define DISPLAY_Y_AXIS_ADDRESS	1
+#define DISPLAY_Z_AXIS_ADDRESS	2
+#define DISPLAY_W_AXIS_ADDRESS	-1
+#define DISPLAY_S_AXIS_ADDRESS	3
 
 #define SCALE_MM				(2560.0 / 25.4)
 #define SCALE_INCH				(2560.0)
@@ -316,6 +320,8 @@ typedef enum {			// state machine for UI and operations
 	set_axis_half,		// setting an axis to 1/2 value, select axis (+ when in show_values)
 	set_axis_value,		// set axis to a specific value
 	zero_all,			// zero all axes (- when in show_values)
+	restart_dro,		// restart dro
+	reset_all,			// reset all settings to defaults and restart
 } _state;
 
 _state lastState;
@@ -334,7 +340,6 @@ typedef struct {
  * selection.
  */
 _menu menu[] = {
-	{ " hell ", 	show_values },
 	{ "CPI",		set_axis_count },
 	{ "bright", 	set_brightness },
 	{ "digits",		set_precision },
@@ -346,6 +351,8 @@ _menu menu[] = {
 	{ "1-2 axis",	set_axis_half },
 	{ "set value", 	set_axis_value },	
 	{ "zero all",	zero_all },
+	{ "restart",	restart_dro },
+	{ "reset",		reset_all },
 	{ "boobies", 	show_values },
 };
 
@@ -385,7 +392,7 @@ struct _saved_settings {
 struct _saved_settings droSettings;
 
 void resetSettings() {
-	droSettings.precision_brightness = 0x33;	// precision -4, brightness 3
+	droSettings.precision_brightness = 0x43;	// precision -4, brightness 3
 	droSettings.axis_enabled = 0x17;			// Spindle, Z, Y, and X enabled
 	droSettings.orientation = 0x00;				// All oriented to whatever scale reads
 	droSettings.units = 0x00;					// All using inches
@@ -1344,6 +1351,10 @@ _interface_buttons debounceButtons() {
 	return (_interface_buttons)buttons;
 }
 
+void restartDRO() {
+	asm volatile ("  jmp 0");
+}
+
 void zeroAllAxes() {
 	xZeroSetValue = xReportedValue;
 	xAbsMode = false;
@@ -1417,7 +1428,7 @@ _state setAxisHalfState(_interface_buttons buttons) {
 		showMode(MODE_CHAR_SEL, 0);
 		showMode(MODE_CHAR_SEL, 1);
 		showMode(MODE_CHAR_SEL, 2);
-		showMenu("1-2 Axis");
+		showMenu("1-2 axis");
 	}
 
 	switch (buttons) {
@@ -1582,7 +1593,8 @@ _state showDisplayMenuState(_interface_buttons buttons) {
 			break;
 
 		case button_up:	// +
-			menuSelected = MIN(++menuSelected, (sizeof(menu) / sizeof(_menu) - 1));
+			// menuSelected = MIN(++menuSelected, (sizeof(menu) / sizeof(_menu) - 1));
+			menuSelected = ++menuSelected % (sizeof(menu) / sizeof(_menu));
 			break;
 
 		case button_select: // >
@@ -1590,7 +1602,8 @@ _state showDisplayMenuState(_interface_buttons buttons) {
 			break;
 
 		case button_down:	// -
-			menuSelected = MAX(--menuSelected, 0);
+			// menuSelected = MAX(--menuSelected, 0);
+			menuSelected = --menuSelected % (sizeof(menu) / sizeof(_menu));
 			break;
 
 		default:	// fall through, invalid or no buttons, ignore
@@ -1654,6 +1667,14 @@ void showState(_state state) {
 
 		case zero_all:
 			Serial.print("Szero_all;");
+			break;
+
+		case reset_all:
+			Serial.print("Sreset_all;");
+			break;
+
+		case restart_dro:
+			Serial.print("Srestart_dro;");
 			break;
 
 		default:
@@ -1736,6 +1757,15 @@ bool checkSwitches() {
 				nextState = show_values;
 				break;
 
+			case restart_dro:
+				restartDRO();
+				break;
+
+			case reset_all:
+				resetSettings();
+				restartDRO();
+				break;
+
 			default:
 				break;			
 		}
@@ -1793,8 +1823,28 @@ inline unsigned int readProbeOutputData() {
 }
 #endif
 
-bool isValueState(_state state) {
-	return (state == show_values) || (state == set_precision);
+bool showAxisValueInState(_state state, int displayAddress) {
+	if (displayAddress < 0) {
+		return false;
+	}
+
+	if (displayAddress == DISPLAY_MENU_ADDRESS && state == show_menu) {
+		return false;
+	}
+
+	return (state == show_values) 	|| (state == show_menu) ||
+		   (state == set_precision) || (state == reverse_axis);
+}
+
+bool showAxisModeInState(_state state, int displayAddress) {
+	if (displayAddress < 0) {
+		return false;
+	}
+	if (displayAddress == DISPLAY_MENU_ADDRESS && state == show_menu) {
+		return false;
+	}
+
+	return true;
 }
 
 // The loop function is called in an endless loop
@@ -1820,12 +1870,16 @@ void loop() {
 			Serial.print(F("X"));
 			Serial.print((long)xReportedValue);
 			Serial.print(F(";"));
-			if (isValueState(currentState)) {
+
+			if (showAxisValueInState(currentState, DISPLAY_X_AXIS_ADDRESS)) {
 				double x = (double)(xReportedValue - (xAbsMode ? 0 : xZeroSetValue)) / xCountPerInch();
-				// TODO: Factor out hardcoded display number for X Axis
-				showDoubleValue((xAxisReversed() ? -x : x), 0);
-				showMode(xAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 0);
+				showDoubleValue((xAxisReversed() ? -x : x), DISPLAY_X_AXIS_ADDRESS);
 			}
+
+			if (showAxisModeInState(currentState, DISPLAY_X_AXIS_ADDRESS)) {
+				showMode(xAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, DISPLAY_X_AXIS_ADDRESS);
+			}
+
 			xLastReportedValue = xReportedValue;
 		}
 #endif
@@ -1838,12 +1892,16 @@ void loop() {
 			Serial.print(F("Y"));
 			Serial.print((long)yReportedValue);
 			Serial.print(F(";"));
-			if (isValueState(currentState)) {
+
+			if (showAxisValueInState(currentState, DISPLAY_Y_AXIS_ADDRESS)) {
 				double y = (double)(yReportedValue - (yAbsMode ? 0 : yZeroSetValue)) / yCountPerInch();
-				// TODO: Factor out hardcoded display number for Y Axis
-				showDoubleValue((yAxisReversed() ? -y : y), 1);
-				showMode(yAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 1);
+				showDoubleValue((yAxisReversed() ? -y : y), DISPLAY_Y_AXIS_ADDRESS);
 			}
+
+			if (showAxisModeInState(currentState, DISPLAY_Y_AXIS_ADDRESS)) {
+				showMode(yAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, DISPLAY_Y_AXIS_ADDRESS);
+			}
+
 			yLastReportedValue = yReportedValue;
 		}
 #endif
@@ -1856,12 +1914,16 @@ void loop() {
 			Serial.print(F("Z"));
 			Serial.print((long)zReportedValue);
 			Serial.print(F(";"));
-			if (isValueState(currentState)) {
+
+			if (showAxisValueInState(currentState, DISPLAY_Z_AXIS_ADDRESS)) {
 				double z = (double)(zReportedValue - (zAbsMode ? 0 : zZeroSetValue)) / zCountPerInch();
-				// TODO: Factor out hardcoded display number for Z Axis
-				showDoubleValue((zAxisReversed() ? -z : z), 2);
-				showMode(zAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 2);
+				showDoubleValue((zAxisReversed() ? -z : z), DISPLAY_Z_AXIS_ADDRESS);
 			}
+
+			if (showAxisModeInState(currentState, DISPLAY_Z_AXIS_ADDRESS)) {
+				showMode(zAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, DISPLAY_Z_AXIS_ADDRESS);
+			}
+
 			zLastReportedValue = zReportedValue;
 		}
 #endif
@@ -1874,12 +1936,15 @@ void loop() {
 			Serial.print(F("W"));
 			Serial.print((long)wReportedValue);
 			Serial.print(F(";"));
-			if (isValueState(currentState)) {
+			if (showAxisValueInState(currentState, DISPLAY_W_AXIS_ADDRESS)) {
 				double w = (double)(wReportedValue - (wAbsMode ? 0 : wZeroSetValue)) / wCountPerInch();
-				// TODO: Factor out hardcoded display number for W Axis
-				showDoubleValue((wAxisReversed() ? -w : w), 3);
-				showMode(wAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, 3);
+				showDoubleValue((wAxisReversed() ? -w : w), DISPLAY_W_AXIS_ADDRESS);
 			}
+
+			if (showAxisModeInState(currentState, DISPLAY_W_AXIS_ADDRESS)) {
+				showMode(wAbsMode ? MODE_CHAR_ABS : MODE_CHAR_INC, DISPLAY_W_AXIS_ADDRESS);
+			}
+
 			wLastReportedValue = wReportedValue;
 		}
 #endif
@@ -1909,10 +1974,14 @@ void loop() {
 				Serial.print((unsigned long)tachReadoutRpm);
 #endif
 				Serial.print(F(";"));
-				if (isValueState(currentState) && currentState != set_precision) {
-					// TODO: Factor out hardcoded display number for RPM
-					showIntValue(tachReadoutRpm, 3);
+				if (showAxisValueInState(currentState, DISPLAY_S_AXIS_ADDRESS)) {
+					showIntValue(tachReadoutRpm, DISPLAY_S_AXIS_ADDRESS);
 				}
+
+				if (showAxisModeInState(currentState, DISPLAY_S_AXIS_ADDRESS)) {
+					showMode('r', DISPLAY_S_AXIS_ADDRESS);
+				}
+
 				lastTachReadoutRpm = tachReadoutRpm;
 			}
 
