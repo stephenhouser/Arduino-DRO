@@ -154,3 +154,10 @@ as described above.
 * The modes "Radius", "Diameter" are displayed by the symbols "r", "d".
 
 * The modes "Tachometer", "Cutting speed" are displayed by the symbols "t", "S".
+
+## Wiring
+
+I don't have a schematic as I just hand-wired things. For those looking for the connections. I'm including a few photos to help. If I get time, I'll draw up the schematic but no promises.
+
+* [Microcontroller and Scales](images/wiring-micro.jpg)
+* [Display and Buttons](images/wiring-panel.jpg)

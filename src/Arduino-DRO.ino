@@ -623,7 +623,7 @@ inline int sCountPerRevolution() {
 #define INPUT_TACH_PIN 8
 
 // Tach pre-scale value (number of tach sensor pulses per revolution)
-#define  TACH_PRESCALE 1
+#define  TACH_PRESCALE 4
 
 // Number of tach measurements to average 
 #define TACH_AVERAGE_COUNT 6
