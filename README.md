@@ -161,3 +161,5 @@ I don't have a schematic as I just hand-wired things. For those looking for the 
 
 * [Microcontroller and Scales](images/wiring-micro.jpg)
 * [Display and Buttons](images/wiring-panel.jpg)
+
+NOTE: I used a resistor ladder network for the pushbuttons. It appears the displays are wired in series.
